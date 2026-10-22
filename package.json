@@ -1,0 +1,73 @@
+{
+  "name": "cortico-world-streamvoice",
+  "version": "0.3.1",
+  "type": "module",
+  "description": "流式语音播报：订阅主 session 的输出增量，从台词参数里边生成边按句切块，第一块立刻合成播放，后面排队连播。音色、语速、音调、音量、念哪些内容、切块长度、块间停顿都是自己的配置，面板上可以逐个试听 / Streaming speech: chunks the line as it streams out of the model and speaks the first sentence before the reply is finished. Voice, rate, pitch, volume, what gets read and chunk pacing are its own settings, auditionable in the panel.",
+  "author": "xww",
+  "license": "AGPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/laojingwei/cortico-world-streamvoice.git"
+  },
+  "homepage": "https://github.com/laojingwei/cortico-world-streamvoice#readme",
+  "bugs": {
+    "url": "https://github.com/laojingwei/cortico-world-streamvoice/issues"
+  },
+  "keywords": [
+    "cortico-world",
+    "cortico",
+    "tts",
+    "streaming",
+    "edge-tts",
+    "speech"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "os": [
+    "win32",
+    "darwin"
+  ],
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "cortico": {
+    "kind": "world",
+    "api": 6,
+    "webUiClient": "dist/webui.js",
+    "displayName": "流式语音播报",
+    "describe": "./describe.json",
+    "locales": {
+      "zh": {
+        "displayName": "流式语音播报",
+        "description": "边生成边朗读：模型还在写，第一句已经出声。音色、语速、音调、音量、念什么、切块与停顿都在自己的配置页里，面板上还能逐个试听，不依赖别的扩展。"
+      },
+      "en": {
+        "displayName": "Streaming speech",
+        "description": "Speaks the reply as it is written: the first sentence is heard before the model finishes. Voice, rate, pitch, volume, what is read and pacing are its own settings, with a built-in audition; no dependency on other extensions."
+      }
+    }
+  },
+  "files": [
+    "src",
+    "dist",
+    "scripts",
+    "describe.json",
+    "README.md"
+  ],
+  "dependencies": {
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  },
+  "scripts": {
+    "check": "tsx scripts/check-chunker.ts",
+    "check:speaker": "tsx scripts/check-speaker.ts",
+    "check:voices": "tsx scripts/check-voices.ts"
+  }
+}
