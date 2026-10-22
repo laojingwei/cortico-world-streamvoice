@@ -50,16 +50,17 @@ jobs:
 
       # npm publish 在「只允许暂存」的 trust 下也会返回 0，包却只进了暂存区。
       # 所以必须回查一次 registry，查不到就算失败，别让 CI 绿灯骗人。
+      # 实测 registry 生效要几分钟（0.3.2 从 publish 到可查约 4 分钟），所以给足 5 分钟。
       - name: 确认真的发布出去了
         run: |
           V=$(node -p "require('./package.json').version")
-          for i in 1 2 3 4 5 6; do
+          for i in $(seq 1 30); do
             if npm view "cortico-world-streamvoice@$V" version > /dev/null 2>&1; then
               echo "✅ registry 上已有 $V"
               exit 0
             fi
-            echo "第 $i 次查询还没出现，5 秒后重试"
-            sleep 5
+            echo "第 $i 次查询还没出现，10 秒后重试"
+            sleep 10
           done
-          echo "::error::发布步骤返回成功，但 registry 上查不到 $V。多半是 Trusted Publisher 的 Allowed actions 没勾「直接发布」，版本被推进了暂存区，需要在 npm 网页批准；或删掉该 trust 重建并勾上。"
+          echo "::error::发布步骤返回成功，但 5 分钟内 registry 上一直查不到 $V。若日志里出现 staged 字样，说明 Trusted Publisher 的 Allowed actions 没允许直接发布，版本停在了暂存区，需要在 npm 网页批准或重建 trust。"
           exit 1
