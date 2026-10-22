@@ -1,5 +1,12 @@
 # 更新日志
 
+## 0.3.2
+
+- 发版改走 GitHub Actions 的 trusted publishing（OIDC）：推一个 `v*` 标签即自动发布，
+  仓库里不再需要任何 token，也不用处理 2FA 验证码。
+- 发布时附带 provenance 签名，npm 包页面可以追溯到具体的 commit 与 workflow。
+- README 增「发版」一节，写清本地流程与首次配置 Trusted Publisher 的字段。
+
 ## 0.3.1
 
 - 首个公开版本。边生成边朗读：订阅主 session 的输出增量，从 `pet_say` / `pet_ask` 的参数里
