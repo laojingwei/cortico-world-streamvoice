@@ -1,0 +1,49 @@
+name: publish
+
+# 发版方式：推一个 v* 标签，或者手动 Run workflow。
+# 用 npm 的 trusted publishing（OIDC）发布，仓库里不存任何 token。
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write          # 换 OIDC 令牌就靠它，缺了发布必失败
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      # trusted publishing 要求 npm >= 11.5.1；runner 自带的版本不够新
+      - name: 升级 npm
+        run: npm install -g npm@latest && npm --version
+
+      - name: 核对 package.json 版本与 tag
+        run: |
+          PKG=$(node -p "require('./package.json').version")
+          TAG="${GITHUB_REF_NAME#v}"
+          echo "package.json = $PKG | tag = $TAG"
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$PKG" != "$TAG" ]; then
+            echo "::error::package.json 的版本 ($PKG) 和 tag ($TAG) 对不上，先改版本号再打 tag"
+            exit 1
+          fi
+
+      - name: 该版本是否已发布
+        run: |
+          V=$(node -p "require('./package.json').version")
+          if npm view "cortico-world-streamvoice@$V" version > /dev/null 2>&1; then
+            echo "::error::npm 上已经有 $V 了，改完代码记得升版本"
+            exit 1
+          fi
+
+      - name: 发布
+        run: npm publish --provenance --access public

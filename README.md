@@ -68,6 +68,36 @@ pnpm add link:D:/dsh/workbuddy/extensions/cortico-world-streamvoice
 同一句会被念两遍——本扩展会在日志里点出是谁，面板上多一盏「另一处也在朗读」。把那边关掉即可。
 这只是提醒，不是依赖。
 
+## 发版
+
+发版走 GitHub Actions 的 **trusted publishing**（OIDC）：runner 拿一次性令牌去 npm 换发布凭证，
+仓库里不存任何 token，也不用管 2FA 验证码。工作流在 `.github/workflows/publish.yml`。
+
+```bash
+# 1. 改 package.json 的 version（改了 dist/webui.js 就必须升，面板按版本寻址）
+# 2. 在 CHANGELOG.md 顶部加一条
+git add -A && git commit -m "0.3.2：…"
+git tag v0.3.2
+git push origin main --tags        # 推 tag 就会触发发布
+```
+
+工作流会先核对 `package.json` 的版本和 tag 是否一致、该版本是否已存在，再 `npm publish --provenance`。
+发布成功后 npm 包页面会带一个 provenance 徽章，能点开看到对应的 commit 和 workflow。
+
+**首次配置（只做一次）**：打开 https://www.npmjs.com/package/cortico-world-streamvoice → 右侧
+`Settings` → `Trusted Publisher` → 选 **GitHub Actions**，填：
+
+| 字段 | 值 |
+|---|---|
+| Organization or user | `laojingwei` |
+| Repository | `cortico-world-streamvoice` |
+| Workflow filename | `publish.yml` |
+| Environment name | 留空 |
+
+环境名一旦填了，工作流里也得同步加 `environment: <名字>`，两边必须一致，否则 OIDC 换不到令牌。
+
+应急时仍然可以在本地手发（需要 2FA 验证码）：`npm publish --registry=https://registry.npmjs.org --otp=<6位码>`。
+
 ## 试听音色（面板）
 
 「流式语音播报」页签的第二张卡可以**现场试听**：
