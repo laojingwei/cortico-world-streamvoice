@@ -37,7 +37,15 @@
     "api": 6,
     "webUiClient": "dist/webui.js",
     "displayName": "流式语音播报",
-    "describe": "./describe.json",
+    "icon": "assets/icon.svg",
+    "screenshots": [
+      "assets/screenshot-1.png",
+      "assets/screenshot-2.png"
+    ],
+    "tags": [
+      "voice"
+    ],
+    "describe": "describe.json",
     "locales": {
       "zh": {
         "displayName": "流式语音播报",
@@ -52,8 +60,10 @@
   "files": [
     "src",
     "dist",
+    "assets",
     "scripts",
     "describe.json",
+    "CHANGELOG.md",
     "README.md"
   ],
   "dependencies": {
