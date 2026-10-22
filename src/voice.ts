@@ -40,6 +40,11 @@ export function verboseOf(cfg: Record<string, unknown>): boolean {
   return cfg.verbose === true;
 }
 
+/** 允不允许模型自己改嗓音；缺省允许。 */
+export function allowSelfTuningOf(cfg: Record<string, unknown>): boolean {
+  return cfg.allowSelfTuning !== false;
+}
+
 /** 已知的「会整段朗读」的 World：配置路径 + 人话名字 + 判断它开没开。 */
 const OTHER_READERS: Array<{
   world: string;

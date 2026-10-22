@@ -1,6 +1,6 @@
 {
   "name": "cortico-world-streamvoice",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "type": "module",
   "description": "流式语音播报：订阅主 session 的输出增量，从台词参数里边生成边按句切块，第一块立刻合成播放，后面排队连播。音色、语速、音调、音量、念哪些内容、切块长度、块间停顿都是自己的配置，面板上可以逐个试听 / Streaming speech: chunks the line as it streams out of the model and speaks the first sentence before the reply is finished. Voice, rate, pitch, volume, what gets read and chunk pacing are its own settings, auditionable in the panel.",
   "author": "xww",

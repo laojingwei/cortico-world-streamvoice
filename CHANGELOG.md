@@ -1,5 +1,23 @@
 # 更新日志
 
+## 0.4.0
+
+- 新增三个工具，模型可以按用户的口语要求自己动手：`speech_status`（查当前设置）、
+  `speech_tune`（改设置）、`speech_silence`（立刻停下当前与队列，不改设置）。
+- `speech_tune` 覆盖本扩展**全部**可调项，一项不漏：嗓音四项、念台词/问句/选项、
+  切块门槛与单块上限、块间停顿、预热、详细日志，以及总开关 `enabled`。
+  数值在工具里就对齐（语速/音调/音量按 5，切块与停顿按配置页的上下限），
+  落盘走 `ctx.persist()`，和配置页改的是同一份 `worlds.streamvoice`。
+- 新增环境提示词 `src/ENV_PROMPT.md`：告诉模型现在是什么嗓音、各项设置意味着什么、
+  什么时候该动手、什么时候该先问。7 个占位符由 `envPromptVars()` 实时提供；
+  在控制台提示词页改完会写到 `<部署目录>/worlds/streamvoice/ENV_PROMPT.md`，
+  优先于包内模板，清空即回落。
+- 新增配置 `allowSelfTuning`（默认开）：关掉后 `speech_tune` 不再出现在工具表里，
+  模型看不到也就不会反复尝试；查看与停止仍然保留。
+- `describe.json` 带上三个工具的声明，扩展市场与 World 页能看到它们。
+- 新增自测：`scripts/check-tools.ts`（参数翻译）、`scripts/check-world-tools.ts`
+  （真的 new 一个 World 出来调工具，并校验提示词占位符）、`scripts/gen-describe.ts`。
+
 ## 0.3.2
 
 - 发版改走 GitHub Actions 的 trusted publishing（OIDC）：推一个 `v*` 标签即自动发布，

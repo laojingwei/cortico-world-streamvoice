@@ -61,6 +61,8 @@ export interface StreamVoiceConfigSection {
   prewarm: boolean;
   /** 逐块打详细日志。 */
   verbose: boolean;
+  /** 允许模型用 `speech_tune` 自己改音色、语速、音调、音量。 */
+  allowSelfTuning: boolean;
 }
 
 export const STREAMVOICE_DEFAULTS: StreamVoiceConfigSection = {
@@ -77,6 +79,8 @@ export const STREAMVOICE_DEFAULTS: StreamVoiceConfigSection = {
   gapMs: GAP_DEFAULT,
   prewarm: true,
   verbose: false,
+  // 默认放任它自己调：用户说「说慢点」的时候，让模型直接改比让用户去点控制台自然
+  allowSelfTuning: true,
 };
 
 /** 一个数字配置项：越界或不是数字时退回默认值。 */
@@ -132,6 +136,10 @@ interface StreamVoiceText {
   prewarmHint: string;
   verbose: string;
   verboseHint: string;
+  selfTuning: string;
+  selfTuningHint: string;
+  promptTitle: string;
+  promptDesc: string;
   lampSpeech: string;
   lampVoice: string;
   lampConflict: string;
@@ -175,6 +183,12 @@ const zh: StreamVoiceText = {
   prewarmHint: '模型开始写时先空合成一声把连接焐热，第一句能快 2 秒左右；关掉就省这一次请求。',
   verbose: '详细日志',
   verboseHint: '把每一块的合成耗时都写进 core.log；关掉只留第一块那行。',
+  selfTuning: '允许模型自己调嗓音',
+  selfTuningHint:
+    '开着时模型可以按你的话改音色、语速、音调、音量（改的是这份配置，下一句生效）；'
+    + '关掉后它只剩「查看当前嗓音」和「立刻停止朗读」两件事可做。',
+  promptTitle: '环境提示词',
+  promptDesc: '发给模型的环境说明：现在是什么嗓音、念哪些内容、能调哪些参数、有哪些工具。改这里就能改它对语音的理解，清空则回落到包内的默认模板。',
   lampSpeech: '流式朗读',
   lampVoice: '嗓音',
   lampConflict: '另一处也在朗读',
@@ -218,6 +232,12 @@ const en: StreamVoiceText = {
   prewarmHint: 'Warm up the synthesis connection while the model starts writing; the first sentence lands about 2s sooner. Off saves that request.',
   verbose: 'Verbose log',
   verboseHint: 'Log the timing of every chunk to core.log; off keeps only the first-chunk line.',
+  selfTuning: 'Let the model tune the voice',
+  selfTuningHint:
+    'When on, the model may change voice, rate, pitch and volume on request; it edits this config and the next sentence follows. '
+    + 'When off, it can still inspect the voice and stop the current line.',
+  promptTitle: 'Environment prompt',
+  promptDesc: 'The environment note sent to the model: current voice, what is read, which settings it may tune, which tools it has. Edit it to change how speech is framed; clearing it falls back to the bundled template.',
   lampSpeech: 'streaming speech',
   lampVoice: 'voice',
   lampConflict: 'something else reads aloud',
@@ -340,6 +360,12 @@ export function streamVoiceConfigGroups(language: Language = 'zh'): ConfigGroup[
         properties: {
           [at('prewarm')]: { type: 'boolean', title: t.prewarm, description: t.prewarmHint, 'x-hot': true },
           [at('verbose')]: { type: 'boolean', title: t.verbose, description: t.verboseHint, 'x-hot': true },
+          [at('allowSelfTuning')]: {
+            type: 'boolean',
+            title: t.selfTuning,
+            description: t.selfTuningHint,
+            'x-hot': true,
+          },
         },
       },
     },

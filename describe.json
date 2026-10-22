@@ -1,4 +1,119 @@
 {
-  "tools": [],
+  "tools": [
+    {
+      "name": "speech_status",
+      "description": "查看自己现在的朗读设置：音色、语速、音调、音量，念哪些内容，切块长度、块间停顿，预热与详细日志，扩展是开是关，以及此刻在不在说、队列还有几块。刚改过设置想复核、不确定当前值、或者用户问「你现在什么声音」「你怎么念得这么慢」时用它。",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "tags": [
+        "read",
+        "snapshot"
+      ],
+      "summary": {
+        "zh": "查看当前的嗓音、念什么、切块与节奏、高级项和队列状态。",
+        "en": "Show voice, what is read, chunking, advanced flags and the queue."
+      }
+    },
+    {
+      "name": "speech_tune",
+      "description": "修改自己的朗读设置，覆盖本扩展的全部可调项。改的是长期配置（和配置页同一份），下一句就生效，重启也还在。所有字段都可选，但至少要给一项。常用对应关系：说快/说慢 → rate；声音大/小 → volume；低沉/高一点 → pitch；换男声/女声/口音 → voice；「别念选项」→ readOptions；「只念台词别念问题」→ readAsk；「一句一停顿」→ gapMs；「别把半句话攒着」→ chunkMinChars；「别一次念太长」→ chunkMaxChars；「别预热」→ prewarm；「详细日志」→ verbose；「整个别念了」→ enabled false（会停掉整个扩展，慎用）。不确定当前值就先调 speech_status。",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "voice": {
+            "type": "string",
+            "description": "音色：中文名（晓晓、晓伊、云希、云扬、曉佳…）或 Edge ShortName（zh-CN-XiaoxiaoNeural）。只能用可用列表里的。"
+          },
+          "rate": {
+            "type": "integer",
+            "minimum": -50,
+            "maximum": 50,
+            "description": "语速：相对原速的百分比，负数更慢，正数更快；按 5 取整。"
+          },
+          "pitch": {
+            "type": "integer",
+            "minimum": -50,
+            "maximum": 50,
+            "description": "音调：Hz，负数更低沉，正数更明亮；按 5 取整。"
+          },
+          "volume": {
+            "type": "integer",
+            "minimum": -50,
+            "maximum": 50,
+            "description": "音量：相对原音量的百分比，负数更轻；按 5 取整。"
+          },
+          "readSay": {
+            "type": "boolean",
+            "description": "念不念 pet_say 的台词。"
+          },
+          "readAsk": {
+            "type": "boolean",
+            "description": "念不念 pet_ask 的问题。"
+          },
+          "readOptions": {
+            "type": "boolean",
+            "description": "问句把可选答案也念出来吗。"
+          },
+          "chunkMinChars": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 40,
+            "description": "短于这么多字的一句并到下一句（1–40）。调小第一声更快。"
+          },
+          "chunkMaxChars": {
+            "type": "integer",
+            "minimum": 20,
+            "maximum": 200,
+            "description": "一块最多这么多字，超过在逗号处再切（20–200）。"
+          },
+          "gapMs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3000,
+            "description": "一块说完后额外停多久，毫秒（0–3000）。嫌说得太赶就加几十毫秒。"
+          },
+          "prewarm": {
+            "type": "boolean",
+            "description": "模型开始写时先空合成一声预热连接，第一句能快约 2 秒。"
+          },
+          "verbose": {
+            "type": "boolean",
+            "description": "把每一块的合成耗时写进日志。"
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "扩展的总开关。false = 整个扩展停止工作、不再出声，要重新打开得先关掉「允许模型自己调嗓音」以外的地方有人动手；除非用户明确要求彻底别念，否则用 speech_silence。"
+          }
+        }
+      },
+      "tags": [
+        "write"
+      ],
+      "summary": {
+        "zh": "按用户的口语要求改本扩展的全部可调项（嗓音、念什么、切块、节奏、高级、总开关），写进长期配置，下一句生效。",
+        "en": "Tune any setting of this extension from a spoken request; persists and applies to the next sentence."
+      }
+    },
+    {
+      "name": "speech_silence",
+      "description": "立刻停掉自己正在念的、以及排队等着念的内容，但不影响接下来的新台词，也不改任何设置。用户说「别念了」「先停一下」「安静」，而你这一轮还要继续说别的话时用它；要整轮彻底安静用 pet_quiet——那个是连后面的台词一起不念。",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "tags": [
+        "write"
+      ],
+      "summary": {
+        "zh": "立刻停掉正在念的和排队的，不改设置、不影响后面的新台词。",
+        "en": "Stop the current line and the queue, without changing settings or later lines."
+      }
+    }
+  ],
   "events": []
 }

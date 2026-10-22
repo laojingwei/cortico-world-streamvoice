@@ -12,12 +12,14 @@
  * 4. 每切出一块就立刻交给 speaker.ts 合成，播放器按顺序连播；
  * 5. 新一轮开始（新的一批送达）、被打断、模型要求安静时，`hush()` 清空队列。
  *
- * 这里不碰气泡、不发事件、不给模型工具：声音只是气泡的回声。
+ * 这里不碰气泡、不发事件；给模型的只有三个只管声音的工具（查嗓音、改嗓音、立刻停），
+ * 改的是本扩展自己的配置，和别人的朗读无关。
  */
 import type {
   OutputTap,
   RunPhase,
   ToolDef,
+  ToolOutcome,
   World,
   WorldHost,
   WorldLamp,
@@ -25,12 +27,19 @@ import type {
 } from 'cortico/core/types.ts';
 import type { Language } from 'cortico/core/language.ts';
 import type { StreamEvent } from 'cortico/protocol/open-responses/index.ts';
+import { fileURLToPath } from 'node:url';
 import { JsonStringField } from './args.ts';
 import { SentenceChunker } from './chunker.ts';
 import { MarkerFilter, speakable } from './clean.ts';
 import {
+  CHUNK_MAX_CEIL,
+  CHUNK_MAX_FLOOR,
+  CHUNK_MIN_CEIL,
+  CHUNK_MIN_FLOOR,
+  GAP_MAX,
   chunkLimits,
   gapOf,
+  numberIn,
   streamVoiceConfigGroups,
   streamVoiceText,
   STREAMVOICE_ID,
@@ -38,6 +47,7 @@ import {
 } from './config.ts';
 import { Speaker } from './speaker.ts';
 import {
+  allowSelfTuningOf,
   describeStyle,
   duplicateReaders,
   prewarmOf,
@@ -49,12 +59,32 @@ import {
 } from './voice.ts';
 import type { SpeechStyle } from './speaker.ts';
 import { PITCH_OPTIONS, RATE_OPTIONS, VOICE_OPTIONS, VOLUME_OPTIONS, voiceLabel, voiceOptionRows } from './voices.ts';
+import { nameOf, prosodyValue, resolveVoice, speechToolDefs, voiceListBrief, type SpeechPatch } from './tools.ts';
 
 /** 会念出来的工具：`pet_say` 的 script，`pet_ask` 的 question。 */
 const SAY_TOOL = 'pet_say';
 const ASK_TOOL = 'pet_ask';
 /** 模型要求安静：正在说的停掉，排队的丢掉。 */
 const QUIET_TOOL = 'pet_quiet';
+
+/**
+ * 环境提示词的默认模板，随包发；用户在 World 页改过之后，框架优先读
+ * `<部署目录>/worlds/streamvoice/ENV_PROMPT.md` 那份覆盖文件。
+ */
+const ENV_PROMPT = fileURLToPath(new URL('./ENV_PROMPT.md', import.meta.url));
+
+/** 回执与日志里用的字段名。 */
+const PROSODY_LABEL: Record<'rate' | 'pitch' | 'volume', string> = {
+  rate: '语速',
+  pitch: '音调',
+  volume: '音量',
+};
+
+const CONTENT_LABEL: Record<'readSay' | 'readAsk' | 'readOptions', string> = {
+  readSay: '念台词',
+  readAsk: '念问句',
+  readOptions: '念选项',
+};
 
 /** 流事件按松散形状读：联合类型里每个成员都查一遍不值当。 */
 interface StreamLike {
@@ -83,6 +113,8 @@ export interface StreamVoiceWorldOptions {
   cfg: StreamVoiceConfigSection;
   /** 部署目录；只用来看看是不是还有别人也在朗读。 */
   botDir: string;
+  /** 把改动深合并进 `worlds.streamvoice` 并落盘；模型改嗓音时用。 */
+  persist: (patch: Record<string, unknown>) => void;
 }
 
 export class StreamVoiceWorld implements World {
@@ -161,12 +193,44 @@ export class StreamVoiceWorld implements World {
     if (phase.state === 'model') this.speaker.prime(this.style);
   }
 
+  /**
+   * 给模型的工具：查嗓音、改嗓音、立刻闭嘴。
+   *
+   * `allowSelfTuning` 关掉时 `speech_tune` 不出现在工具表里——模型根本看不到它，
+   * 不是「看到了再被拒」，这样它也不会反复尝试。
+   */
   tools(): ToolDef[] {
-    return [];
+    if (this.opts.cfg.enabled === false) return [];
+    return speechToolDefs({
+      status: () => this.describeForModel(),
+      tune: (patch) => this.tune(patch),
+      silence: () => this.silenceForModel(),
+      allowTuning: () => allowSelfTuningOf(this.opts.cfg),
+    });
   }
 
+  /**
+   * 环境提示词里的变量。每次重建前缀都会重新取，所以模型看到的永远是当下这份设置，
+   * 不是启动时那份。返回的键必须与 `ENV_PROMPT.md` 里的占位符一一对应。
+   */
   envPromptVars(): Record<string, string> {
-    return {};
+    const style = this.style;
+    const cfg = this.opts.cfg;
+    const limits = this.limits;
+    const others = duplicateReaders(this.opts.botDir);
+    return {
+      'streamvoice.state': `${voiceLabel(style.voice)}（${style.voice}），语速 ${style.rate}，音调 ${style.pitch}，音量 ${style.volume}。`,
+      'streamvoice.content': `念什么：台词${onOff(readSayOf(cfg))}、问句${onOff(readAskOf(cfg))}、选项${onOff(readOptionsOf(cfg))}。`,
+      'streamvoice.chunks': `切块与节奏：短句并下一句的门槛 ${limits.min} 字，单块上限 ${limits.max} 字，块间停顿 ${gapOf(cfg)}ms。`,
+      'streamvoice.switches': `预热${onOff(prewarmOf(cfg))}、详细日志${onOff(verboseOf(cfg))}、总开关${onOff(cfg.enabled !== false)}。`,
+      'streamvoice.canTune': allowSelfTuningOf(cfg)
+        ? '主人允许你自己改这些设置（`worlds.streamvoice.allowSelfTuning` 开着），改完下一句就生效。'
+        : '主人关掉了「允许模型自己调嗓音」：`speech_tune` 不在你的工具表里，要改得请主人去控制台改。',
+      'streamvoice.voices': voiceGroupsBrief(),
+      'streamvoice.otherReaders': others.length
+        ? `注意：${others.join('、')}也在整段朗读，同一句会被念两遍；可以提醒主人把它那边关掉。`
+        : '',
+    };
   }
 
   webUi(language: Language = 'zh'): WorldWebUiDecl {
@@ -188,6 +252,23 @@ export class StreamVoiceWorld implements World {
       label: t.label,
       lamps,
       panels: [{ id: 'stream', title: t.label, getMethods: ['state', 'hush', 'options', 'preview'] }],
+      // 环境提示词：默认模板随包发，用户在 World 页改的是部署目录那份覆盖文件
+      promptDocs: [{
+        key: `worlds.${STREAMVOICE_ID}.env`,
+        title: t.promptTitle,
+        description: t.promptDesc,
+        path: ENV_PROMPT,
+        role: 'envPrompt',
+        vars: [
+          { name: 'streamvoice.state', description: '当前音色、语速、音调、音量' },
+          { name: 'streamvoice.content', description: '念台词／问句／选项的开关' },
+          { name: 'streamvoice.chunks', description: '切块门槛、单块上限、块间停顿' },
+          { name: 'streamvoice.switches', description: '预热、详细日志、总开关' },
+          { name: 'streamvoice.canTune', description: '模型能不能自己改设置（取决于 allowSelfTuning）' },
+          { name: 'streamvoice.voices', description: '可用音色清单：中文名 + ShortName' },
+          { name: 'streamvoice.otherReaders', description: '还有谁也在整段朗读；没有则留空', multiline: true },
+        ],
+      }],
       config: streamVoiceConfigGroups(language),
       invoke: async (panel, method, args) => {
         if (panel !== 'stream') throw new Error(`unknown ${panel}.${method}`);
@@ -230,6 +311,7 @@ export class StreamVoiceWorld implements World {
       prewarm: prewarmOf(this.opts.cfg),
       verbose: verboseOf(this.opts.cfg),
       duplicateReaders: duplicateReaders(this.opts.botDir),
+      allowSelfTuning: allowSelfTuningOf(this.opts.cfg),
       minChars: limits.min,
       maxChars: limits.max,
       gapMs: gapOf(this.opts.cfg),
@@ -238,6 +320,146 @@ export class StreamVoiceWorld implements World {
       ...this.speaker.snapshot(),
       ...(this.lastError ? { error: this.lastError } : {}),
     };
+  }
+
+  /* ---------- 工具：模型自己改设置 ---------- */
+
+  /** 给 `speech_status` 的一段话：模型读完就知道自己的全部设置和此刻状态。 */
+  private describeForModel(): string {
+    const style = this.style;
+    const cfg = this.opts.cfg;
+    const limits = this.limits;
+    const on = cfg.enabled !== false;
+    const now = !on ? '本扩展已关闭，不会出声' : this.speaker.speaking ? '此刻正在说' : '此刻待命';
+    const queue = this.speaker.queued > 0 ? `，还有 ${this.speaker.queued} 块排队` : '';
+    return `嗓音：${voiceLabel(style.voice)}（${style.voice}），语速 ${style.rate}，音调 ${style.pitch}，音量 ${style.volume}。`
+      + `念什么：台词${onOff(readSayOf(cfg))}、问句${onOff(readAskOf(cfg))}、选项${onOff(readOptionsOf(cfg))}。`
+      + `切块与节奏：短句并下一句的门槛 ${limits.min} 字，单块上限 ${limits.max} 字，块间停顿 ${gapOf(cfg)}ms。`
+      + `高级：预热${onOff(prewarmOf(cfg))}、详细日志${onOff(verboseOf(cfg))}；总开关${onOff(on)}。`
+      + `${now}${queue}。`;
+  }
+
+  /**
+   * 按模型给的参数改设置——这个扩展能调的项都在这里，和配置页改的是同一份 `worlds.streamvoice`。
+   *
+   * 先把口语值翻成合法档位（语速/音调/音量对齐到 5，切块与停顿夹进配置页的范围），
+   * 再写进配置（落盘 + 活引用立即生效），最后把「原来什么样、现在什么样」讲回去，
+   * 模型才知道自己改成了什么、要不要继续调。
+   */
+  private tune(patch: SpeechPatch): string | ToolOutcome {
+    const cfg = this.opts.cfg;
+    if (!allowSelfTuningOf(cfg)) {
+      return {
+        text: '这台机器把「允许模型自己调嗓音」关着（worlds.streamvoice.allowSelfTuning），我不能自己改。要改得主人去控制台。',
+        failed: true,
+      };
+    }
+
+    const before = this.style;
+    const next: Record<string, unknown> = {};
+    const changed: string[] = [];
+
+    // ---- 嗓音 ----
+    if (patch.voice !== undefined) {
+      const found = resolveVoice(patch.voice);
+      if (!found) {
+        return {
+          text: `没有叫「${patch.voice}」的音色。常用的中文音色：${voiceListBrief()}；`
+            + '另外还有粤语、台湾、英/日/韩的音色。问一下主人想换哪个，别自己猜。',
+          failed: true,
+        };
+      }
+      next.voice = found.id;
+      if (found.id !== before.voice) changed.push(`音色 ${voiceLabel(before.voice)} → ${nameOf(found)}`);
+    }
+    for (const key of ['rate', 'pitch', 'volume'] as const) {
+      const raw = patch[key];
+      if (raw === undefined) continue;
+      const value = prosodyValue(key === 'pitch' ? 'hz' : 'percent', raw);
+      next[key] = value;
+      if (value !== before[key]) changed.push(`${PROSODY_LABEL[key]} ${before[key]} → ${value}`);
+    }
+
+    // ---- 念什么 ----
+    for (const key of ['readSay', 'readAsk', 'readOptions'] as const) {
+      const raw = patch[key];
+      if (raw === undefined) continue;
+      const was = cfg[key] !== false;
+      next[key] = raw;
+      if (raw !== was) changed.push(`${CONTENT_LABEL[key]} ${onOff(was)} → ${onOff(raw)}`);
+    }
+
+    // ---- 切块与节奏 ----
+    const limits = chunkLimits(cfg);
+    let min = limits.min;
+    let max = limits.max;
+    if (patch.chunkMinChars !== undefined) min = numberIn(patch.chunkMinChars, min, CHUNK_MIN_FLOOR, CHUNK_MIN_CEIL);
+    if (patch.chunkMaxChars !== undefined) max = numberIn(patch.chunkMaxChars, max, CHUNK_MAX_FLOOR, CHUNK_MAX_CEIL);
+    // 和 chunkLimits() 一样：max 永远不小于 min。谁给的值越界，就让 max 让路
+    const bumpedMax = max < min;
+    if (bumpedMax) max = min;
+    if (min !== limits.min) {
+      next.chunkMinChars = min;
+      changed.push(`切块门槛 ${limits.min} → ${min} 字`);
+    }
+    if (max !== limits.max) {
+      next.chunkMaxChars = max;
+      changed.push(`单块上限 ${limits.max} → ${max} 字${bumpedMax ? '（比门槛小，已抬到门槛）' : ''}`);
+    }
+    if (patch.gapMs !== undefined) {
+      const gap = numberIn(patch.gapMs, gapOf(cfg), 0, GAP_MAX);
+      next.gapMs = gap;
+      if (gap !== gapOf(cfg)) changed.push(`块间停顿 ${gapOf(cfg)} → ${gap}ms`);
+    }
+
+    // ---- 高级与总开关 ----
+    if (patch.prewarm !== undefined) {
+      const was = prewarmOf(cfg);
+      next.prewarm = patch.prewarm;
+      if (patch.prewarm !== was) changed.push(`预热 ${onOff(was)} → ${onOff(patch.prewarm)}`);
+    }
+    if (patch.verbose !== undefined) {
+      const was = verboseOf(cfg);
+      next.verbose = patch.verbose;
+      if (patch.verbose !== was) changed.push(`详细日志 ${onOff(was)} → ${onOff(patch.verbose)}`);
+    }
+    let disabling = false;
+    if (patch.enabled !== undefined) {
+      const was = cfg.enabled !== false;
+      next.enabled = patch.enabled;
+      if (patch.enabled !== was) {
+        changed.push(`总开关 ${onOff(was)} → ${onOff(patch.enabled)}`);
+        disabling = !patch.enabled;
+      }
+    }
+
+    if (!Object.keys(next).length) {
+      return '这次没给任何能改的字段，什么都没改。至少给一项（字段见工具说明），不确定当前值就先调 speech_status。';
+    }
+
+    this.opts.persist(next);
+    const after = this.style;
+    const afterLimits = this.limits;
+    if (changed.length) this.log(`模型改了设置：${changed.join('，')}`);
+
+    const head = changed.length ? `改动：${changed.join('，')}。` : '给的数值和原来一样，配置没变。';
+    const now = `现在：${voiceLabel(after.voice)}，语速 ${after.rate}，音调 ${after.pitch}，音量 ${after.volume}；`
+      + `念台词${onOff(readSayOf(cfg))}、问句${onOff(readAskOf(cfg))}、选项${onOff(readOptionsOf(cfg))}；`
+      + `切块 ${afterLimits.min}–${afterLimits.max} 字，停顿 ${gapOf(cfg)}ms；`
+      + `预热${onOff(prewarmOf(cfg))}、日志${onOff(verboseOf(cfg))}。下一句起生效。`;
+    const warn = disabling
+      ? '注意：总开关已经关掉，这个扩展从现在起停止工作、不再出声，我也没办法自己再打开——要恢复得请主人在控制台「流式语音播报」页重新打开。'
+      : '';
+    return `${head}${now}${warn}`;
+  }
+
+  /** `speech_silence`：停掉当前与队列，但不影响后面的新台词。 */
+  private silenceForModel(): string {
+    const queued = this.speaker.queued;
+    const speaking = this.speaker.speaking;
+    if (!speaking && queued === 0) return '现在没在念、队列也是空的，不用停。';
+    this.hush('模型要求先停一下');
+    return `已停：${speaking ? '正在念的那一块中断了' : '本来没在念'}，队列里的 ${queued} 块丢掉了。后面新说的话照常念。`;
   }
 
   /** 把当前配置里的开关推给 speaker；每次开口前都会调一次，改配置不用重启。 */
@@ -424,6 +646,33 @@ function prosody(value: unknown, pattern: RegExp): string | null {
 /** 日志里露一小段就够看。 */
 function brief(text: string): string {
   return text.length > 40 ? `${text.slice(0, 40)}…` : text;
+}
+
+/** 开关在人话里的样子。 */
+function onOff(value: boolean): string {
+  return value ? '开' : '关';
+}
+
+/**
+ * 按语言分组的音色名，给环境提示词用。
+ *
+ * 只写名字不写 ShortName：名字能被 `resolveVoice()` 认出来，而 29 个 ShortName 全写进
+ * 前缀要吃掉七百多个字符，每次请求都付一遍不值得。要精确写法时看配置页。
+ */
+function voiceGroupsBrief(): string {
+  const groups: Array<[string, string]> = [
+    ['中文', 'zh-CN'],
+    ['粤语', 'zh-HK'],
+    ['台湾', 'zh-TW'],
+    ['英语', 'en'],
+    ['日语', 'ja'],
+    ['韩语', 'ko'],
+  ];
+  const parts = groups.map(([label, prefix]) => {
+    const names = VOICE_OPTIONS.filter((v) => v.id.startsWith(prefix)).map(nameOf);
+    return names.length ? `${label}：${names.join('、')}` : '';
+  }).filter(Boolean);
+  return `${parts.join('；')}。给名字或 ShortName 都行。`;
 }
 
 /** `pet_ask` 的选项；参数不是合法 JSON 时当没有。 */
