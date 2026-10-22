@@ -47,3 +47,19 @@ jobs:
 
       - name: 发布
         run: npm publish --provenance --access public
+
+      # npm publish 在「只允许暂存」的 trust 下也会返回 0，包却只进了暂存区。
+      # 所以必须回查一次 registry，查不到就算失败，别让 CI 绿灯骗人。
+      - name: 确认真的发布出去了
+        run: |
+          V=$(node -p "require('./package.json').version")
+          for i in 1 2 3 4 5 6; do
+            if npm view "cortico-world-streamvoice@$V" version > /dev/null 2>&1; then
+              echo "✅ registry 上已有 $V"
+              exit 0
+            fi
+            echo "第 $i 次查询还没出现，5 秒后重试"
+            sleep 5
+          done
+          echo "::error::发布步骤返回成功，但 registry 上查不到 $V。多半是 Trusted Publisher 的 Allowed actions 没勾「直接发布」，版本被推进了暂存区，需要在 npm 网页批准；或删掉该 trust 重建并勾上。"
+          exit 1
