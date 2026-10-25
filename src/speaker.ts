@@ -5,23 +5,33 @@
  * 播放器只在上一块说完之后把下一块交过去。所以第 1 块在说的时候，第 2 块已经在合成了，
  * 两块之间的空隙只剩交接时间。
  *
+ * 合成那一头有两套引擎：默认走 Edge 朗读接口（一条长连接，热了之后一块几百毫秒），
+ * 也可以走任意 OpenAI 兼容的 HTTP 服务（见 api-tts.ts）。引擎由 `SpeechStyle.engine` 决定，
+ * 队列、打断、试听这些逻辑两边共用——对上层来说只是「一块字 → 一个音频文件」。
+ *
  * `hush()` 把代次（epoch）加一：还在排队的块直接丢掉，正在合成的结果回来了也丢掉，
  * 正在放的那一片杀掉播放器。这是「新回复开始」和「用户停止」唯一的清空方式。
  */
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { speechToFile, type ApiSpeech } from './api-tts.ts';
 import { MsEdgeTTS, OUTPUT_FORMAT } from './edge-tts/index.ts';
 import { createPlayer, type Player } from './player.ts';
 
 const MP3 = OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3;
 
 export interface SpeechStyle {
+  /** 用哪套引擎：`edge` 走 Edge 朗读接口，`api` 走 `api` 里的 HTTP 服务。 */
+  engine: 'edge' | 'api';
+  /** 当前音色：Edge 引擎下是 ShortName，API 引擎下是后端的音色名。 */
   voice: string;
   rate: string;
   /** 音调，如 `+10Hz`。 */
   pitch: string;
   volume: string;
+  /** API 引擎的请求参数；Edge 引擎下也用不到，但一直带着，切引擎时不用重算。 */
+  api: ApiSpeech;
 }
 
 /** 可以随时改的开关；世界每次开口前现写一遍，改配置不用重启。 */
@@ -136,6 +146,11 @@ export class Speaker {
     if (this.priming || this.speakingNow || this.jobs.length) return;
     if (Date.now() - this.primedAt < PRIME_TTL_MS) return;
     if (process.platform !== 'win32' && process.platform !== 'darwin') return;
+    // HTTP 是一次一请求，没有「连接冷了要几秒」这回事；空打一发只是白烧一次显存
+    if (style.engine === 'api') {
+      this.primedAt = Date.now();
+      return;
+    }
     this.priming = true;
     this.synthChain = this.synthChain.then(async () => {
       try {
@@ -232,14 +247,11 @@ export class Speaker {
     this.hush();
     try {
       const stage = this.stage ?? (this.stage = await mkdtemp(join(tmpdir(), 'coopanion-streamvoice-')));
-      await this.prepareTts(style);
       dir = await mkdtemp(join(stage, 'try-'));
-      const { audioFilePath } = await this.tts!.toFile(dir, text, {
-        rate: style.rate, pitch: style.pitch, volume: style.volume,
-      });
+      const clip = await this.synthesiseTo(style, text, dir);
       const synthMs = Date.now() - started;
       this.speakingNow = true;
-      const result = await this.player.play(audioFilePath);
+      const result = await this.player.play(clip, volumeOf(style));
       this.speakingNow = false;
       // 播放器刚被 hush 过，重新点一个备用
       void this.player.warm(stage).catch(() => {});
@@ -326,7 +338,7 @@ export class Speaker {
       if (first || this.verbose) {
         this.log(`第 ${job.seq} 块出声（${first ? `切出后 ${this.stats.firstAudioMs}ms，` : ''}合成 ${job.synthAt - job.startedAt}ms，等播放 ${job.spokenAt - job.synthAt}ms）`);
       }
-      const result = await this.player.play(job.clip);
+      const result = await this.player.play(job.clip, volumeOf(job.style));
       this.speakingNow = false;
       this.current = null;
       this.take(job);
@@ -360,11 +372,30 @@ export class Speaker {
   }
 
   private async prepareTts(style: SpeechStyle): Promise<void> {
+    // API 引擎没有需要复用的连接；真正连接在 speechToFile 里
+    if (style.engine === 'api') return;
     const key = [style.voice, style.rate, style.pitch, style.volume].join('|');
     this.tts ??= new MsEdgeTTS({ enableLogger: false });
     if (key === this.metadataKey) return;
     await this.tts.setMetadata(style.voice, MP3);
     this.metadataKey = key;
+  }
+
+  /**
+   * 一块字 → 一个音频文件。两套引擎在这里分岔，上层（队列、打断、试听）不用知道差别。
+   *
+   * API 引擎不能走 `prepareTts`：那边没有长连接，音色、格式、语气都在请求体里。
+   */
+  private async synthesiseTo(style: SpeechStyle, text: string, dir: string): Promise<string> {
+    if (style.engine === 'api') {
+      const out = await speechToFile(text, style.api, dir);
+      return out.file;
+    }
+    await this.prepareTts(style);
+    const { audioFilePath } = await this.tts!.toFile(dir, text, {
+      rate: style.rate, pitch: style.pitch, volume: style.volume,
+    });
+    return audioFilePath;
   }
 
   private async synthesise(job: Job): Promise<void> {
@@ -375,14 +406,10 @@ export class Speaker {
       return;
     }
     const stage = this.stage ?? (this.stage = await mkdtemp(join(tmpdir(), 'coopanion-streamvoice-')));
-    await this.prepareTts(job.style);
     const dir = await mkdtemp(join(stage, `c${job.seq}-`));
     job.dir = dir;
     try {
-      const { audioFilePath } = await this.tts!.toFile(dir, job.text, {
-        rate: job.style.rate, pitch: job.style.pitch, volume: job.style.volume,
-      });
-      job.clip = audioFilePath;
+      job.clip = await this.synthesiseTo(job.style, job.text, dir);
       job.synthAt = Date.now();
     } catch (err) {
       this.failedAt = Date.now();
@@ -393,6 +420,14 @@ export class Speaker {
       throw err;
     }
   }
+}
+
+/**
+ * 播放音量：API 引擎的音频是成品，音量在播放器这边调；Edge 引擎的
+ * 音量已经由合成参数带进音频里了，原样放即可。
+ */
+function volumeOf(style: SpeechStyle): number {
+  return style.engine === 'api' ? style.api.volume : 100;
 }
 
 /** 等一会儿；块与块之间的停顿用它。 */

@@ -3,7 +3,8 @@
 你说的话会被念出来：文字一边生成，声音一边出口，不等整段写完。念的是 `pet_say` 的台词
 （`readSay`）、`pet_ask` 的问题（`readAsk`），问到选择时连选项一起念（`readOptions`）。
 
-现在的设置：{{ streamvoice.state }}
+现在的设置：{{ streamvoice.engine }}
+{{ streamvoice.state }}
 {{ streamvoice.content }}
 {{ streamvoice.chunks }}
 {{ streamvoice.switches }}
@@ -14,6 +15,9 @@
 - `speech_tune` —— 改设置，字段覆盖上面全部项目（嗓音、念什么、切块、节奏、高级、总开关）。
   用户说「说慢点」「声音小一点」「换个男声」「别念选项了」「一句一停顿」这类话时直接用，
   不必让主人去翻控制台。字段说明与取值范围在工具声明里。
+  换合成引擎也在这里：`engine` 选 `edge` 或 `api`，`apiBase`（服务根地址）/ `apiVoice` / `apiInstructions`
+  调自建语音服务；API 引擎下想改语速用 `apiSpeedFactor`（倍率，1 是原速）。
+  地址不确定就问主人，别猜。
 - `speech_silence` —— 立刻停下正在念的和排队的，只停这一轮、不改设置。
   要整轮彻底安静用 `pet_quiet`。
 

@@ -11,7 +11,7 @@ import { existsSync } from 'node:fs';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SpeechStyle } from './speaker.ts';
-import { styleOf } from './voices.ts';
+import { styleOf } from './config.ts';
 
 export { styleOf };
 
@@ -93,7 +93,8 @@ export function duplicateReaders(botDir: string): string[] {
   return out;
 }
 
-/** 面板与日志上用的一句嗓音说明。 */
+/** 面板与日志上用的一句嗓音说明。API 引擎下音调/音量由后端决定，只列音色、格式与倍率。 */
 export function describeStyle(style: SpeechStyle): string {
+  if (style.engine === 'api') return `API · ${style.api.voice} · ${style.api.format} · ${style.api.speed}×`;
   return `${style.voice} · ${style.rate} · ${style.pitch} · ${style.volume}`;
 }

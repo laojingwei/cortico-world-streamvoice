@@ -17,9 +17,11 @@
  * which pnpm 11 treats as an unapproved build script and fails installs over.
  */
 import { createWriteStream, rmSync, writeFileSync } from 'node:fs';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import WebSocket, { type ClientOptions } from 'ws';
+import { generateSecMsGecV2 } from './drm.ts';
 import { OUTPUT_EXTENSIONS, type OutputFormat } from './Output.ts';
 import { PROSODY_DEFAULTS, type ProsodyInput } from './Prosody.ts';
 
@@ -62,11 +64,21 @@ interface SynthesisStream {
 
 export class MsEdgeTTS {
   static readonly TRUSTED_CLIENT_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
-  static readonly WSS_URL = 'wss://api.msedgeservices.com/tts/cognitiveservices/websocket/v1';
+  /**
+   * 端点与 `Sec-MS-GEC-Version` 必须成对跟着上游走。
+   *
+   * 2026-10 起 `api.msedgeservices.com` 那条新端点对旧的 `1-` 令牌一律回 HTTP 200 空响应，
+   * 且令牌算法换成了 v2 双摘要；上游 edge-tts 7.3 因此退回这条老端点、带 `2-` 版本号。
+   * 版本号要和 User-Agent 里的大版本对齐（这里是 143）。
+   */
+  static readonly WSS_URL = 'wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1';
+  static readonly CHROMIUM_FULL_VERSION = '143.0.3650.75';
+  static readonly SEC_MS_GEC_VERSION = `2-${MsEdgeTTS.CHROMIUM_FULL_VERSION}`;
   private static readonly JSON_XML_DELIM = '\r\n\r\n';
   private static readonly AUDIO_DELIM = 'Path:audio\r\n';
   private static readonly VOICE_LANG_REGEX = /\b[a-z]{2,}-[A-Z]{2}\b/;
-  private static _clockOffsetMs = 0;
+  /** 本机时钟与服务端的差（秒）；只在 403 时校正一次。 */
+  private static _clockSkewSeconds = 0;
 
   private readonly _enableLogger: boolean;
   private readonly _connectionTimeoutMs: number;
@@ -102,9 +114,12 @@ export class MsEdgeTTS {
 
   /** The URL a client connects to; the clock-derived Sec-MS-GEC is part of the query. */
   static async getSynthUrl(): Promise<string> {
-    const reqId = MsEdgeTTS.generateUUID();
-    const secMsGec = await MsEdgeTTS.generateSecMsGec(MsEdgeTTS.TRUSTED_CLIENT_TOKEN);
-    return `${MsEdgeTTS.WSS_URL}?Ocp-Apim-Subscription-Key=${MsEdgeTTS.TRUSTED_CLIENT_TOKEN}&Sec-MS-GEC=${secMsGec}&Sec-MS-GEC-Version=1-143.0.3650.96&ConnectionId=${reqId}`;
+    const reqId = MsEdgeTTS.generateUUID().replace(/-/g, '');
+    const secMsGec = MsEdgeTTS.generateSecMsGec(MsEdgeTTS.TRUSTED_CLIENT_TOKEN);
+    return `${MsEdgeTTS.WSS_URL}?TrustedClientToken=${MsEdgeTTS.TRUSTED_CLIENT_TOKEN}`
+      + `&ConnectionId=${reqId}`
+      + `&Sec-MS-GEC=${secMsGec}`
+      + `&Sec-MS-GEC-Version=${MsEdgeTTS.SEC_MS_GEC_VERSION}`;
   }
 
   private _initClient(): Promise<void> {
@@ -141,7 +156,13 @@ export class MsEdgeTTS {
     const ws = this._ws = new WebSocket(synthUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0',
+        'Accept-Encoding': 'gzip, deflate, br, zstd',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Pragma': 'no-cache',
+        'Cache-Control': 'no-cache',
         'Origin': 'chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold',
+        // 服务端现在还要一个 muid cookie；值本身无所谓，每次连接换一个新的
+        'Cookie': `muid=${randomBytes(16).toString('hex').toUpperCase()};`,
       },
       agent: this._agent,
     });
@@ -161,8 +182,16 @@ export class MsEdgeTTS {
           response.destroy();
           return;
         }
-        const error = Object.assign(new Error(`Unexpected server response: ${response.statusCode}`), {
-          statusCode: response.statusCode,
+        // 200 与 403 都是「握手被网关挡下」：200 多半是令牌/版本对不上（该升级本扩展），
+        // 403 多半是本机时钟偏了或这个网络出口被限流。错误里直接把话说明白，别只甩状态码。
+        const status = response.statusCode;
+        const hint = status === 200
+          ? '：朗读接口拒绝了令牌，通常是这版扩展的校验参数过期了'
+          : status === 403
+            ? '：要么本机时钟偏差过大，要么这个网络出口被限流'
+            : '';
+        const error = Object.assign(new Error(`Unexpected server response: ${status}${hint}`), {
+          statusCode: status,
           serverDate: response.headers.date,
         });
         // this listener suppresses ws's default handshake abort, so close both HTTP objects
@@ -279,7 +308,8 @@ export class MsEdgeTTS {
       const serverTime = typeof underlying?.serverDate === 'string' ? Date.parse(underlying.serverDate) : NaN;
       if (retryClock && underlying?.statusCode === 403 && Number.isFinite(serverTime)
         && generation === this._clientGeneration && (!deadline || Date.now() < deadline)) {
-        MsEdgeTTS._clockOffsetMs = serverTime - Date.now();
+        // 令牌按 5 分钟一个窗口算，本机时钟偏出半个窗口就会被判 403；照服务端 Date 纠一次再连
+        MsEdgeTTS._clockSkewSeconds = (serverTime - Date.now()) / 1000;
         return this._createClient(false, deadline, generation);
       }
       throw error;
@@ -312,15 +342,12 @@ export class MsEdgeTTS {
     });
   }
 
-  static async generateSecMsGec(trustedClientToken: string): Promise<string> {
-    const ticks = Math.floor((Date.now() + MsEdgeTTS._clockOffsetMs) / 1000) + 11644473600;
-    const rounded = ticks - (ticks % 300);
-    const windowsTicks = rounded * 10_000_000;
-    const data = new TextEncoder().encode(`${windowsTicks}${trustedClientToken}`);
-    const hash = await crypto.subtle.digest('SHA-256', data);
-    return Array.from(new Uint8Array(hash), (b) => b.toString(16).padStart(2, '0'))
-      .join('')
-      .toUpperCase();
+  /**
+   * 时间派生的校验令牌。算法在 `drm.ts` 里：v2 是 `<CS64>-<SHA256>` 两段，
+   * 别换回单个 SHA-256 —— 服务端会当没带令牌，回 200 空响应。
+   */
+  static generateSecMsGec(trustedClientToken: string): string {
+    return generateSecMsGecV2(trustedClientToken, undefined, MsEdgeTTS._clockSkewSeconds);
   }
 
   private async _send(message: string, requestId?: string, initialSocket?: WebSocket): Promise<void> {

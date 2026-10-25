@@ -16,8 +16,13 @@ export type PlayResult = 'played' | 'cut' | 'failed';
 export interface Player {
   /** 预启动播放器并把脚本落在 dir 里，省掉第一片的启动时间。 */
   warm(dir: string): Promise<void>;
-  /** 放一片，resolve 时声音已经结束（或被 cut、或失败）。 */
-  play(clip: string): Promise<PlayResult>;
+  /**
+   * 放一片，resolve 时声音已经结束（或被 cut、或失败）。
+   *
+   * `volume` 是 0–100 的播放音量：API 引擎回来的音频是成品，调不了合成参数，
+   * 只能在这里把声音放轻；Edge 引擎已经在合成时带了音量，这里传 100 即可。
+   */
+  play(clip: string, volume?: number): Promise<PlayResult>;
   /** 立刻停下正在放的一片。 */
   hush(): void;
   stop(): Promise<void>;
@@ -37,7 +42,16 @@ const PS_SCRIPT = [
   '  $line = [Console]::In.ReadLine()',
   '  if ($null -eq $line) { break }',
   "  if ($line -eq 'QUIT') { break }",
-  "  [WinMM.MCI]::mciSendString(\"open `\"$line`\" type mpegvideo alias svplay\", $null, 0, [System.IntPtr]::Zero) | Out-Null",
+  '  # 每行是「音量<TAB>路径」；音量是 0–1000 的 MCI 刻度',
+  '  $vol = 1000',
+  '  $file = $line',
+  '  $tab = $line.IndexOf([char]9)',
+  '  if ($tab -ge 0) {',
+  '    $vol = [int]$line.Substring(0, $tab)',
+  '    $file = $line.Substring($tab + 1)',
+  '  }',
+  "  [WinMM.MCI]::mciSendString(\"open `\"$file`\" type mpegvideo alias svplay\", $null, 0, [System.IntPtr]::Zero) | Out-Null",
+  '  [WinMM.MCI]::mciSendString("setaudio svplay volume to $vol", $null, 0, [System.IntPtr]::Zero) | Out-Null',
   '  [WinMM.MCI]::mciSendString(\'play svplay wait\', $null, 0, [System.IntPtr]::Zero) | Out-Null',
   "  [WinMM.MCI]::mciSendString('close svplay', $null, 0, [System.IntPtr]::Zero) | Out-Null",
   "  [Console]::Out.WriteLine('DONE')",
@@ -129,10 +143,12 @@ class WindowsPlayer implements Player {
     p?.(result);
   }
 
-  async play(clip: string): Promise<PlayResult> {
+  async play(clip: string, volume = 100): Promise<PlayResult> {
     const ok = this.child ? true : await this.ensure();
     const child = this.child;
     if (!ok || !child || !child.stdin?.writable) return 'failed';
+    // MCI 的音量刻度是 0–1000
+    const level = Math.round(Math.min(100, Math.max(0, volume)) * 10);
     return new Promise<PlayResult>((resolve) => {
       let settled = false;
       const finish = (r: PlayResult): void => {
@@ -148,8 +164,8 @@ class WindowsPlayer implements Player {
         finish('cut');
       }, CLIP_TIMEOUT_MS);
       this.pending = finish;
-      // MCI 认反斜杠；路径里不会有换行
-      child.stdin.write(`${clip}\n`, 'utf8', (err) => {
+      // MCI 认反斜杠；路径里不会有换行，第一段是音量
+      child.stdin.write(`${level}\t${clip}\n`, 'utf8', (err) => {
         if (err) finish('failed');
       });
     });
@@ -180,9 +196,10 @@ class MacPlayer implements Player {
 
   async warm(): Promise<void> {}
 
-  play(clip: string): Promise<PlayResult> {
+  play(clip: string, volume = 100): Promise<PlayResult> {
     return new Promise((resolve) => {
-      const child = spawn('afplay', [clip], { stdio: 'ignore' });
+      const level = Math.min(100, Math.max(0, volume)) / 100;
+      const child = spawn('afplay', ['-v', String(level), clip], { stdio: 'ignore' });
       this.current = child;
       let settled = false;
       const finish = (r: PlayResult): void => {

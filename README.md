@@ -5,6 +5,10 @@
 本扩展**独立工作**：音色、语速、音调、音量、念哪些内容、切块长短、块间停顿，全是它自己的配置
 （`worlds.streamvoice`），不读任何别的扩展的设置，也不依赖别的包才能跑。装上去、开起来，就有声音。
 
+声音有两个来源，配置里一个开关切：**Edge 朗读接口**（开箱能用，29 个音色），或者**任何 OpenAI 兼容的
+`/v1/audio/speech` 服务**——本机 WSL 里的 Qwen3-TTS、CosyVoice、GPT-SoVITS、vLLM 起的都能接。
+换引擎只改 `worlds.streamvoice.engine`，两条路共用同一套切块、排队、打断、试听。
+
 ![面板](docs/panel.png)
 
 旧的整段朗读要等台词全部写完、记进事件库，再靠轮询捞出来，整段合成、整段播放。
@@ -19,7 +23,7 @@
        └─ …function_call_arguments.delta  JSON 碎片 → args.ts 抠出 script
             └─ clean.ts                  【动作】<表情> 标记去掉，表情/网址/Markdown 去掉
                  └─ chunker.ts           按句切块：短句并下一句，超长在逗号处再切
-                      └─ speaker.ts      立刻合成（与播放流水线并行）→ 播放器按顺序连播
+                      └─ speaker.ts      立刻合成（Edge 连接 / 自建 HTTP 服务）→ 播放器按顺序连播
 ```
 
 - **订阅的是函数调用参数，不是正文。** 这个 bot 从不用 assistant 正文说话：说出来的一切都在
@@ -98,17 +102,43 @@ git push origin main --tags        # 推 tag 就会触发发布
 
 应急时仍然可以在本地手发（需要 2FA 验证码）：`npm publish --registry=https://registry.npmjs.org --otp=<6位码>`。
 
-## 试听音色（面板）
+## 三个页签
 
-「流式语音播报」页签的第二张卡可以**现场试听**：
+世界页顶部有五个页签：**流式语音播报 / Edge 语音 / API 语音 / 配置 / 环境提示词**。
 
-1. 选音色、语速、音调、音量（下拉就是配置里那几组选项，默认取当前配置）；试听文本也能改；
-2. 按「试听」→ 服务端用**同一套合成链路**合成这一句并放出来，返回「可以用 · 彩云 · 合成 1.2s」，
-   或者把失败原因写成一句人话（比如「这个音色没能合成出来：Edge 朗读接口没有提供它」）；
-3. 满意就按「写入配置」，和配置页是同一份值，下一句立即生效。
+前三个是扩展自己给的（`panels`），后两个是框架画的。想用哪套引擎就点哪一页，页内只有那一套
+参数和一个「启用」开关——以前两套并排挤在「配置」里，谁也说不清哪一组此刻生效。
 
-因为试听走的就是正式朗读的那条路（同样的音色/语速/音调/音量、同样的播放器），
-**它能不能出声就等于正式朗读能不能出声**；`scripts/check-voices.ts` 会把整张音色表跑一遍。
+### 流式语音播报
+
+只报状态：待命 / 在说 / 已关、当前引擎与嗓音、切块与停顿、第一块出声耗时、本轮块数 / 排队 /
+已说 / 失败、本轮总耗时，外加「立即静音」。
+
+### Edge 语音
+
+启用开关 + 音色 / 语速 / 音调 / 音量，四个下拉的选项就是配置里的那几档，默认取当前值。
+下面可以改试听文本、按「试听这句」→ 服务端用**同一套合成链路**合成这一句并放出来，回来告诉你
+「可以用 · 晓晓 · 合成 1.2s」，失败就说人话（比如「这个音色没能合成出来：Edge 朗读接口没有提供它」）。
+**在这一页按试听就走 Edge，不用先启用**，也不会改动当前引擎。
+满意就按「保存」，和「配置」页签写的是同一份值，下一句立即生效。
+
+### API 语音
+
+启用开关 + 服务地址（根地址）+ 访问令牌（密码框，掩着，留空＝不改，旁边可勾「清除令牌」）+
+音色 / 模型 / 格式 / 语言 / 语气指令 / 语速倍率 / 播放音量 / 请求超时，以及「连接测试」。
+
+1. 点「连接测试」：现问一遍 `<base>/models` 与 `<base>/audio/voices`，通了就把音色与模型换成下拉
+   （选项就是后端此刻支持的清单，末项「其它（手填）」换回输入框），并告诉你
+   「通 · 29ms · 10 个音色、1 个模型」；只有一个端点 404 说明后端没实现它，仍算连通，那一项保持手填。
+   模型下拉第一项是「（不发送）」，表示请求里不带 `model`；
+2. 音色与模型打开就是下拉，读的是探测缓存，不必先点测试；提示行会写「用的是 3 分钟前的清单」，
+   点一次「连接测试」就刷新；
+3. 按「试听这句」直接打你那个后端——**在这一页按就用这一页的配置**，不必先启用 API，也不会
+   把引擎切过来；按「保存」才一次写全（地址、令牌、音色、模型、格式、语言、语气、倍率、音量、超时）。
+
+**API 引擎下的音量与语速**：音量是 `apiVolume`，真的在播放器上调；语速是 `apiSpeedFactor`，
+作为 `speed` 请求参数发出去——后端不支持 `speed` 时它没有效果（前端不做重采样）。
+音调则只能由后端决定。
 
 ## 让模型自己调嗓音（工具）
 
@@ -118,25 +148,30 @@ git push origin main --tags        # 推 tag 就会触发发布
 | 工具 | 标签 | 作用 |
 |---|---|---|
 | `speech_status` | read / snapshot | 查当前的完整设置：嗓音四项、念什么、切块与节奏、预热与日志、总开关，以及此刻在不在说、队列几块 |
-| `speech_tune` | write | 改**这个扩展的全部可调项**（见下表），和配置页改的是同一份值 |
+| `speech_tune` | write | 改**这个扩展的全部可调项**（见下表），和页签上改的是同一份值 |
 | `speech_silence` | write | 立刻停掉正在念的和排队的，不改设置、不影响后面的新台词（整轮安静仍用 `pet_quiet`） |
 
 `speech_tune` 的字段与配置项一一对应，一个不漏：
 
 | 分类 | 字段 | 说明 |
 |---|---|---|
-| 嗓音 | `voice` | 中文名（晓晓、云希…）或 Edge ShortName |
+| 引擎 | `engine` / `useEdge` / `useApi` | 引擎本身，或两个启用开关（开一个自动关另一个，和页签上同一套规则） |
+| | `apiBase` / `apiKey` / `apiModel` | 服务根地址（整条端点会被截回根）、令牌（空串清空）、模型名 |
+| | `apiVoice` / `apiFormat` | 后端音色名、要回的音频格式 |
+| | `apiInstructions` / `apiLanguage` | 整段语气指令、语言 |
+| | `apiSpeedFactor` / `apiVolume` / `apiTimeoutMs` | 语速倍率 0.25–4（1 不发 speed）、播放音量 0–100、单块超时 |
+| 嗓音 | `voice` | 中文名（晓晓、云希…）或 Edge ShortName，只在 Edge 引擎下有效 |
 | | `rate` / `pitch` / `volume` | −50…50，语速与音量是 %、音调是 Hz，自动对齐到 5 |
 | 念什么 | `readSay` / `readAsk` / `readOptions` | 台词、问句、选项三个开关 |
-| 切块与节奏 | `chunkMinChars` / `chunkMaxChars` / `gapMs` | 参数范围与配置页完全一致；上限被给到比门槛小时会自动抬高并在回执里说明 |
+| 切块与节奏 | `chunkMinChars` / `chunkMaxChars` / `gapMs` | 参数范围与「配置」页签完全一致；上限被给到比门槛小时会自动抬高并在回执里说明 |
 | 高级 | `prewarm` / `verbose` | 预热、详细日志 |
 | 总开关 | `enabled` | 整个扩展开关。关掉后扩展停止工作，模型自己打不开，得人去控制台恢复 |
 
 几个刻意的设计：
 
 - **改的是长期配置**：`speech_tune` 走 `ctx.persist()` 写进 `worlds.streamvoice`，下一句就生效，
-  重启也还在；配置页上和工具改的是同一份值。
-- **档位对齐到 5**：模型给 `rate: 37`，落盘的是 `+35%`——配置页的下拉就是这些值，
+  重启也还在；页签上和工具改的是同一份值。
+- **档位对齐到 5**：模型给 `rate: 37`，落盘的是 `+35%`——页签上的下拉就是这些值，
   不会留下一个下拉框显示不出来的野值。
 - **音色只认名单里的**：说「林黛玉」会被拒，回执里附几个可用的中文音色名让模型自己问清楚，
   免得换成一个合成不出来的音色、把声音搞哑。
@@ -152,14 +187,16 @@ git push origin main --tags        # 推 tag 就会触发发布
 `envPrompt` 模板随每次前缀重建发给模型，里面的值都是实时的：
 
 ```
-现在的设置：晓晓（zh-CN-XiaoxiaoNeural），语速 +0%，音调 +0Hz，音量 +0%。
+现在的设置：合成引擎：Edge 朗读接口，音色 晓晓（zh-CN-XiaoxiaoNeural），语速 +0%，音调 +0Hz，音量 +0%。
+嗓音 晓晓（zh-CN-XiaoxiaoNeural），语速 +0%，音调 +0Hz，音量 +0%。
 念什么：台词开、问句开、选项开。
 切块与节奏：短句并下一句的门槛 8 字，单块上限 60 字，块间停顿 0ms。
 预热开、详细日志关、总开关开。
 ```
 
-占位符一共 7 个（`{{ streamvoice.state }}`、`.content`、`.chunks`、`.switches`、`.canTune`、
+占位符一共 8 个（`{{ streamvoice.engine }}`、`.state`、`.content`、`.chunks`、`.switches`、`.canTune`、
 `.voices`、`.otherReaders`），由 `envPromptVars()` 提供，改完配置下一次重建就是新的。
+切到 API 引擎后 `.engine` 会带上端点、音色、格式，`.voices` 换成后端那套名字。
 
 **可以直接改**：控制台 → 提示词页 → 「环境提示词」，编辑后保存到
 `<部署目录>/worlds/streamvoice/ENV_PROMPT.md`，框架优先读这份覆盖文件，清空即回落到包内默认。
@@ -170,13 +207,85 @@ git push origin main --tags        # 推 tag 就会触发发布
 `scripts/check-world-tools.ts` 真的 `new` 一个 World 出来调那三个工具，并检查
 `ENV_PROMPT.md` 里每个占位符都有值、渲染后没有残留 `{{ }}`。
 
-## 配置（都在控制台「流式语音播报 → 配置」页，改完下一句生效，不用重启）
+## 配置（改完下一句生效，不用重启）
 
-### 嗓音
+两套引擎各占一个页签（「Edge 语音」「API 语音」），页内顶上就是它自己的启用开关；「配置」页签
+只剩下念什么、切块与节奏、高级。开一边自动关另一边（`engine` 跟着变），所以切引擎不用刷新页面。
+
+> 这两个页签由扩展自己画，所以保存走页签自己的 `save` 方法（框架的 `/api/config` 只认
+> 「配置」页签里声明过的组）。校验规则与 schema 里写的一致：档位枚举、数值范围、地址规范化。
+
+### 启用开关
 
 | 键 | 默认 | 说明 |
 |---|---|---|
-| `voice` | `zh-CN-XiaoxiaoNeural` | Edge TTS 音色 ShortName，下拉 29 个（中/粤/台/英/日/韩），都已实测能出声 |
+| `useEdge` | `false` | 「Edge 语音」组的启用开关；打开就把 `engine` 切成 `edge`，并关掉 `useApi` |
+| `useApi` | `false` | 「API 语音」组的启用开关；打开就把 `engine` 切成 `api`，并关掉 `useEdge` |
+
+真正决定声音来源的是 `engine`（`edge` / `api`），开关只是它的两个把手：两个都关着时保持现有引擎
+并点亮对应那侧，两个都开着（刚打开另一边）时切到另一边。模型用 `speech_tune` 改 `useEdge` / `useApi`
+也是同一套规则。
+
+### 语音 API（「API 语音」页签）
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `apiBase` | `http://127.0.0.1:8091/v1` | **服务根地址**（OpenAI 说的 `base_url`）。只写主机名会自动补 `/v1`；把整条 `/v1/audio/speech` 贴进来也能认，会截回根地址 |
+| `apiVoice` | `vivian` | 后端音色名，**动态下拉**：选项来自最近一次探测（启动时自动探一次并缓存），名字后面带说明，如 `serena — 温暖、柔和的年轻女声 · 中文` |
+| `apiModel` | 空 | OpenAI 协议的 `model` 字段，同样是动态下拉；第一项「（不发送）」，选它就不带这一项 |
+| `apiFormat` | `mp3` | `mp3` / `wav` / `flac` / `opus` / `pcm`（`pcm` 无头，播不出来） |
+| `apiInstructions` | 空 | 整段共用的语气指令，如「用开心的语气说」「语速偏慢、语气温柔」 |
+| `apiLanguage` | 空 | `Chinese` / `English` / …；留空让后端判断 |
+| `apiSpeedFactor` | `1` | 语速倍率 0.25–4，作为 `speed` 发给后端；等于 1 时不发。输出端变速，压太狠音调会飘 |
+| `apiVolume` | `100` | 播放音量 0–100。API 回来的音频是成品，音量在播放器这边调（MCI `setaudio volume` / `afplay -v`），不影响音色、也不发给后端 |
+| `apiTimeoutMs` | `30000` | 单块合成的超时；卡住就跳过这一块，不影响后面 |
+
+探测到的清单缓存在 `worlds.streamvoice.apiCatalog`（`{ base, at, voices, models }`），
+「API 语音」页签读它，所以**打开就能选，不用每次点「连接测试」**；地址一改缓存作废并自动重探。
+
+访问令牌 `apiKey` 不在「配置」页签里：那里只能画明文输入框。它只在「API 语音」页签以密码框出现
+（留空＝不改，勾「清除令牌」＝清空），存进 `config.json`，请求时按 `Authorization: Bearer` 发。
+
+接口路径按规范自己拼，所以换后端一般只改根地址：
+
+| 用途 | 路径 |
+|---|---|
+| 合成 | `POST <base>/audio/speech` |
+| 模型清单 | `GET <base>/models`（OpenAI 规范） |
+| 音色清单 | `GET <base>/audio/voices`（不是标准端点，认不出来就当没有） |
+
+其他后端要手动写接口地址时，只要它抄的是 OpenAI 那套请求体（`input` / `voice` / `response_format`，可选
+`model` / `instructions` / `language` / `speed`），直接填根地址就能用。
+
+**接自建服务**：
+
+1. 在「API 语音」页签打开「启用 API 语音」（「Edge 语音」那边的开关会自动关掉）；
+2. 面板上填服务地址（默认 `127.0.0.1:8091/v1`），按 **连接测试**——通了会把服务提供的音色、模型换成下拉，
+   直接选，不用背名字；地址被规范化了也会回填；
+3. 按「试听」。出声就成了；不出声看那条红字，它直接说是连不上、404 端点不对、还是 400 音色不存在。
+
+手测后端本身：
+
+```bash
+curl -X POST http://127.0.0.1:8091/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{"input":"你好，欢迎使用语音合成。","voice":"vivian","instructions":"用开心的语气说"}' \
+  --output out.wav
+
+curl http://127.0.0.1:8091/v1/audio/voices   # 看这个后端有哪些音色
+curl http://127.0.0.1:8091/v1/models         # 看它有哪些模型
+```
+
+> `engine = api` 时 `voice` / `rate` / `pitch` / `volume` 不生效——那是 Edge 的四个参数（在「Edge 语音」页签里改）。
+> 想变速用 `apiSpeedFactor`，或在 `apiInstructions` 里写「说得慢一点」走模型自己的韵律。
+> `apiSpeedFactor` 是输出端重采样，压到 0.6 以下音色会明显发飘，介意的场合用语气指令更自然。
+> 切回 `edge` 时原来的嗓音还在，不用重设。
+
+### 嗓音（`engine = edge` 时生效）
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `voice` | `zh-CN-XiaoxiaoNeural` | Edge 朗读接口的音色 ShortName，下拉 29 个（中/粤/台/英/日/韩），都已实测能出声 |
 | `rate` | `+0%` | 相对语速，5% 一档，-50%…+50%（21 档） |
 | `pitch` | `+0Hz` | 音调，5Hz 一档，-50Hz…+50Hz（21 档）；负数更低沉，正数更明亮 |
 | `volume` | `+0%` | 相对音量，5% 一档，-50%…+50%（21 档） |
@@ -220,18 +329,22 @@ git push origin main --tags        # 推 tag 就会触发发布
 World 不挂载，接收器也就不存在，框架不再把增量扇过来；原来负责朗读的扩展照旧走它自己的路径
 （整段台词写完 → 事件库 → 轮询 → 整段合成播放）。
 
-## 面板
+## 面板实现
 
-控制台「流式语音播报」页签（`dist/webui.js`，手写 ESM，无依赖）有两张卡：
+`dist/webui.js` 是手写 ESM，无依赖，导出 `{ panels: { stream, 'edge-voice', 'api-voice' } }`。
 
-- **运行状态**：待命 / 在说 / 已关、当前嗓音、切块与停顿、第一块出声耗时、本轮块数 / 排队 / 已说 / 失败、
-  本轮总耗时，以及「立即静音」；
-- **试听音色**：见上文。
+- 字段表由后端给：`invoke('fields')` 返回 `{ group, title, desc, fields: [{ key, type, title, desc,
+  value, options, min, max, suffix, placeholder }] }`，文案与选项全在 `src/config.ts`。前端只按 `type`
+  摆控件，不认识任何字段名——以后加参数只改后端一处。
+- 保存走 `invoke('save', [values])`，写的是同一份 `worlds.streamvoice`；「启用」开关改动即生效，
+  其余字段按「保存」。
+- 试听走 `invoke('preview', [...])`，用的是**页面上此刻的值**（还没保存也能听），
+  并且**引擎由页签决定**（`edge-voice` → Edge，`api-voice` → API），与「启用」开关无关。
 
 顶部两盏灯：流式朗读（待命/正在说/出错）、嗓音（当前用的是哪个）；只有真的还有别人在朗读时，
 才多出第三盏「另一处也在朗读」。
 
-> 面板产物是按包版本寻址的（`/assets/extensions/<包>/<版本>/webui.js`），改了 `dist/webui.js`
+> 面板产物按包版本寻址（`/assets/extensions/<包>/<版本>/webui.js`），改了 `dist/webui.js`
 > 记得同时升 `package.json` 的 `version` 并重启 Core，否则浏览器会拿旧的那份。
 
 ## 自测
@@ -248,18 +361,26 @@ $TSX scripts/check-speaker.ts
 # 把整张音色表逐个合成一遍，列出哪个不可用（会依次出声）
 $TSX scripts/check-voices.ts
 
+# API 引擎联调：地址规范化、连接测试、合成与 speed；服务没起就跳过。只合成不播放
+$TSX scripts/check-api.ts
+
+# 工具与 World 层：参数翻译、改配置、提示词占位符（不连网、不出声）
+$TSX scripts/check-tools.ts
+$TSX scripts/check-world-tools.ts
+
 # 让 Coo 真的回一段（Coopanion 正在运行时；没设控制台密码时不用登录）
 $TSX scripts/send-chat.ts "用一段话说说今天适合做什么"
 ```
 
 实测看 `data/logs/core.log` 里 `worlds.streamvoice` 的行：`切出第 1 块（… 开写后 Xms）`、
-`第 1 块出声（切出后 Yms…）`；试听会留一行 `试听 <音色> <语速> <音调> <音量>：可用/失败`。
+`第 1 块出声（切出后 Yms…）`；试听会留一行 `试听（Edge 朗读/API 服务）<声音>：可用/失败`。
 第一块出声的时刻早于 `pet_say 写完`，就是提前出声。
 
 ## 依赖与授权
 
 - 运行期只依赖一个 `ws`（`src/edge-tts/` 用它连 Edge TTS 的 WebSocket 接口），其余全是 Node 内置模块；
-  合成出来的 mp3 走 Windows 的 winmm MCI（常驻 PowerShell）或 macOS 的 `afplay` 播放。
+  API 引擎用的是 Node 内置 `fetch`，不需要额外包；合成出来的音频走 Windows 的 winmm MCI（常驻 PowerShell）
+  或 macOS 的 `afplay` 播放。
 - `src/edge-tts/` 是 msedge-tts v2.1.0 的客户端源码拷贝，MIT，版权 Migushthe2nd：
   上游带 `preinstall: only-allow pnpm`，pnpm 装不上，所以自带一份。**这是代码来源，不是运行期依赖。**
 - `scripts/` 下几个自测脚本历史上用 tsx 直接跑 `.ts`；`pnpm check` / `check:speaker` / `check:voices`

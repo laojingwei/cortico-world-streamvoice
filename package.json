@@ -1,8 +1,8 @@
 {
   "name": "cortico-world-streamvoice",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "type": "module",
-  "description": "流式语音播报：订阅主 session 的输出增量，从台词参数里边生成边按句切块，第一块立刻合成播放，后面排队连播。音色、语速、音调、音量、念哪些内容、切块长度、块间停顿都是自己的配置，面板上可以逐个试听 / Streaming speech: chunks the line as it streams out of the model and speaks the first sentence before the reply is finished. Voice, rate, pitch, volume, what gets read and chunk pacing are its own settings, auditionable in the panel.",
+  "description": "流式语音播报：订阅主 session 的输出增量，从台词参数里边生成边按句切块，第一块立刻合成播放，后面排队连播。合成引擎可切：微软 Edge 朗读接口，或任何 OpenAI 兼容的语音服务（只填根地址，模型与音色点一下就能探测出来）。音色、语速、念哪些内容、切块长度、块间停顿都是自己的配置，面板上可以逐个试听 / Streaming speech: chunks the line as it streams out of the model and speaks the first sentence before the reply is finished. The engine is switchable between Microsoft Edge and any OpenAI-compatible speech service (enter the base URL; voices and models are discovered by a built-in connection test).",
   "author": "xww",
   "license": "AGPL-3.0-or-later",
   "repository": {
@@ -19,6 +19,8 @@
     "tts",
     "streaming",
     "edge-tts",
+    "openai-tts",
+    "local-tts",
     "speech"
   ],
   "engines": {
@@ -49,11 +51,11 @@
     "locales": {
       "zh": {
         "displayName": "流式语音播报",
-        "description": "边生成边朗读：模型还在写，第一句已经出声。音色、语速、音调、音量、念什么、切块与停顿都在自己的配置页里，面板上还能逐个试听，不依赖别的扩展。"
+        "description": "边生成边朗读：模型还在写，第一句已经出声。合成走 Edge 朗读接口，或任何 OpenAI 兼容的语音服务——只填根地址，点一次「连接测试」就能把后端支持的音色与模型拉出来直接选。音色、念什么、切块与停顿都在自己的配置页里，只显示当前引擎那一组，不依赖别的扩展。"
       },
       "en": {
         "displayName": "Streaming speech",
-        "description": "Speaks the reply as it is written: the first sentence is heard before the model finishes. Voice, rate, pitch, volume, what is read and pacing are its own settings, with a built-in audition; no dependency on other extensions."
+        "description": "Speaks the reply as it is written: the first sentence is heard before the model finishes. Synthesise through Microsoft Edge or any OpenAI-compatible speech service — enter the base URL and one connection test pulls the voices and models the backend offers. Only the active engine is shown, and nothing is read from other extensions."
       }
     }
   },
@@ -77,7 +79,10 @@
   },
   "scripts": {
     "check": "tsx scripts/check-chunker.ts",
+    "check:api": "tsx scripts/check-api.ts",
     "check:speaker": "tsx scripts/check-speaker.ts",
+    "check:tools": "tsx scripts/check-tools.ts",
+    "check:world": "tsx scripts/check-world-tools.ts",
     "check:voices": "tsx scripts/check-voices.ts"
   }
 }

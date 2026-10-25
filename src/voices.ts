@@ -7,7 +7,6 @@
  * 音色是本机 Edge 朗读接口实际返回的名单（`voices/list` 拉下来筛的中日韩英 30 个），
  * 不在名单里的 ShortName 也可以手写进 config.json，只是可能合成失败。
  */
-import type { SpeechStyle } from './speaker.ts';
 
 export interface VoiceOption {
   /** Edge TTS 的 ShortName，存进配置的就是它。 */
@@ -87,13 +86,8 @@ export function voiceLabel(id: string): string {
   return VOICE_OPTIONS.find((v) => v.id === id)?.label.split(' · ')[0] ?? id;
 }
 
-/** 从配置读出这次要用的嗓音；缺项退回默认值。 */
-export function styleOf(cfg: Record<string, unknown>): SpeechStyle {
-  const str = (v: unknown, fallback: string): string => (typeof v === 'string' && v.trim() ? v.trim() : fallback);
-  return {
-    voice: str(cfg.voice, DEFAULT_VOICE),
-    rate: str(cfg.rate, '+0%'),
-    pitch: str(cfg.pitch, DEFAULT_PITCH),
-    volume: str(cfg.volume, '+0%'),
-  };
-}
+/**
+ * 本文件只放音色表与档位，不引 config.ts：config.ts 要读这里的默认值，反过来引它会形成
+ * 循环导入（入口是 voices 时 config 顶层就会读到未初始化的常量）。「配置 + 引擎 → 一次
+ * 合成要的嗓音」由 config.ts 的 `styleOf()` 负责。
+ */

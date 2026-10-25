@@ -41,6 +41,10 @@ const tuneProps = Object.keys(
   (SPEECH_TOOL_DECLS.find((d) => d.name === TUNE_TOOL)!.parameters as { properties: Record<string, unknown> }).properties,
 );
 const ALL_SETTINGS = [
+  // 引擎与 API
+  'engine', 'useEdge', 'useApi',
+  'apiBase', 'apiKey', 'apiModel', 'apiVoice', 'apiFormat', 'apiInstructions', 'apiLanguage',
+  'apiSpeedFactor', 'apiVolume', 'apiTimeoutMs',
   'voice', 'rate', 'pitch', 'volume',
   'readSay', 'readAsk', 'readOptions',
   'chunkMinChars', 'chunkMaxChars', 'gapMs',
@@ -83,6 +87,28 @@ ok('认不出的布尔丢掉', flags.enabled === undefined);
 
 const numbers = readPatch({ chunkMinChars: '3', chunkMaxChars: 80, gapMs: '120' });
 ok('切块与停顿的数字也认', numbers.chunkMinChars === 3 && numbers.chunkMaxChars === 80 && numbers.gapMs === 120);
+
+console.log('参数提取：引擎与 API');
+const apiPatch = readPatch({
+  engine: ' api ',
+  apiBase: ' http://127.0.0.1:8091/v1 ',
+  apiVoice: 'serena',
+  apiFormat: 'wav',
+  apiInstructions: ' 用开心的语气说 ',
+  apiSpeedFactor: '1.35',
+  apiTimeoutMs: '5000',
+});
+ok('engine 去空格保留', apiPatch.engine === 'api', apiPatch.engine);
+ok('服务地址去空格', apiPatch.apiBase === 'http://127.0.0.1:8091/v1', apiPatch.apiBase);
+ok('API 音色', apiPatch.apiVoice === 'serena');
+ok('音频格式', apiPatch.apiFormat === 'wav');
+ok('语气指令去空格', apiPatch.apiInstructions === '用开心的语气说');
+ok('语速倍率按数字认', apiPatch.apiSpeedFactor === 1.35, String(apiPatch.apiSpeedFactor));
+ok('超时按数字认', apiPatch.apiTimeoutMs === 5000);
+ok('空串清空令牌', readPatch({ apiKey: '   ' }).apiKey === '');
+ok('空串清空语气指令', readPatch({ apiInstructions: '' }).apiInstructions === '');
+ok('Edge 音色空串被丢掉', readPatch({ voice: '   ' }).voice === undefined);
+ok('引擎空串被丢掉', readPatch({ engine: '' }).engine === undefined);
 
 console.log('工具表开关');
 const opened = speechToolDefs({

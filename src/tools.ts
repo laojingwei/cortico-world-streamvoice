@@ -21,6 +21,7 @@ import {
   CHUNK_MIN_FLOOR,
   GAP_MAX,
 } from './config.ts';
+import { SPEED_MAX, SPEED_MIN, SPEED_STEP } from './api-tts.ts';
 import { VOICE_OPTIONS, type VoiceOption } from './voices.ts';
 
 export const STATUS_TOOL = 'speech_status';
@@ -33,6 +34,21 @@ export const PROSODY_STEP = 5;
 
 /** 模型能改的每一项；全部可选，但至少要有一项。 */
 export interface SpeechPatch {
+  // 引擎
+  engine?: string;
+  apiBase?: string;
+  apiKey?: string;
+  apiModel?: string;
+  apiVoice?: string;
+  apiFormat?: string;
+  apiInstructions?: string;
+  apiLanguage?: string;
+  apiSpeedFactor?: number;
+  apiVolume?: number;
+  apiTimeoutMs?: number;
+  // 引擎开关（与 engine 联动）
+  useEdge?: boolean;
+  useApi?: boolean;
   // 嗓音
   voice?: string;
   rate?: number;
@@ -73,18 +89,94 @@ export const SPEECH_TOOL_DECLS: ToolSpec[] = [
     description:
       '修改自己的朗读设置，覆盖本扩展的全部可调项。改的是长期配置（和配置页同一份），下一句就生效，重启也还在。'
       + '所有字段都可选，但至少要给一项。常用对应关系：'
-      + '说快/说慢 → rate；声音大/小 → volume；低沉/高一点 → pitch；换男声/女声/口音 → voice；'
+      + '说快/说慢 → rate；声音大/小 → volume；低沉/高一点 → pitch；换男声/女声/口音 → voice（只在 edge 引擎下有效）；'
       + '「别念选项」→ readOptions；「只念台词别念问题」→ readAsk；'
       + '「一句一停顿」→ gapMs；「别把半句话攒着」→ chunkMinChars；「别一次念太长」→ chunkMaxChars；'
-      + '「别预热」→ prewarm；「详细日志」→ verbose；「整个别念了」→ enabled false（会停掉整个扩展，慎用）。'
+      + '「别预热」→ prewarm；「详细日志」→ verbose；'
+      + '「换成你自己的语音服务」→ engine "api" 配 apiBase / apiVoice；「换个 API 音色」→ apiVoice；'
+      + '「说话温柔点/开心点」→ apiInstructions（整段共用，不是逐句）；「说快/说慢」在 API 引擎下用 apiSpeedFactor；'
+      + '「API 的声音太响/太轻」→ apiVolume；'
+      + '「整个别念了」→ enabled false（会停掉整个扩展，慎用）。'
       + '不确定当前值就先调 speech_status。',
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
+        engine: {
+          type: 'string',
+          enum: ['edge', 'api'],
+          description:
+            '合成引擎。edge = Edge 朗读接口（默认，音色用 voice）；'
+            + 'api = 用户自建/本地的 OpenAI 兼容语音服务（参数在 apiBase / apiVoice 等，音色只在那边生效）。'
+            + '用户说「用你自己部署的语音模型」「换成本地 TTS」时用 api；改之前最好先问清地址，别猜。',
+        },
+        apiBase: {
+          type: 'string',
+          description:
+            'API 服务的根地址（OpenAI 的 base_url），如 http://127.0.0.1:8091/v1。'
+            + '只写到主机名也行，会自动补 /v1；接口路径由扩展自己拼，不要把 /audio/speech 带上。',
+        },
+        apiKey: {
+          type: 'string',
+          description: 'API 服务的 Bearer 令牌；本地服务通常留空。传空串表示清空。不要回显给用户。',
+        },
+        apiModel: {
+          type: 'string',
+          description: 'OpenAI 协议的 model 字段；留空就不发送，需要填的后端按它文档给的模型 id 写。',
+        },
+        apiVoice: {
+          type: 'string',
+          description:
+            '后端的音色名，名字是后端自己的那一套。不确定就先调 speech_status 看当前的，或者问用户；'
+            + '面板上「连接测试」能把服务支持的名字列出来。',
+        },
+        apiFormat: {
+          type: 'string',
+          enum: ['mp3', 'wav', 'flac', 'opus', 'pcm'],
+          description: '要后端回的音频格式；默认 mp3。后端只给 wav 时才改 wav。pcm 无头、播不出来。',
+        },
+        apiInstructions: {
+          type: 'string',
+          description: '整段话共用的语气指令，如「用开心的语气说」「语速偏慢、语气温柔」；传空串清空。不是逐句指令。',
+        },
+        apiLanguage: {
+          type: 'string',
+          description: '如 Chinese / English / Japanese；留空让后端判断。',
+        },
+        apiSpeedFactor: {
+          type: 'number',
+          minimum: SPEED_MIN,
+          maximum: SPEED_MAX,
+          multipleOf: SPEED_STEP,
+          description:
+            `API 引擎的语速倍率，${SPEED_MIN}–${SPEED_MAX}，1 是原速（等于 1 时不发给后端）。`
+            + '这是输出端变速，压得太多音调会发飘；在意音色就改用 apiInstructions 写「语速快一点」。',
+        },
+        apiVolume: {
+          type: 'integer',
+          minimum: 0,
+          maximum: 100,
+          description:
+            'API 引擎的播放音量（0–100，100 是原音量）。API 回来的音频是成品，只能在播放器这边调小；'
+            + '它不改变音色，也不发给后端。用户说「API 的声音太响/太轻」时用它。',
+        },
+        useEdge: {
+          type: 'boolean',
+          description: '打开就用 Edge 朗读（等于把引擎切到 edge，并关掉 useApi）。和 useApi 互斥。',
+        },
+        useApi: {
+          type: 'boolean',
+          description: '打开就用 API 服务（等于把引擎切到 api，并关掉 useEdge）。和 useEdge 互斥。',
+        },
+        apiTimeoutMs: {
+          type: 'integer',
+          minimum: 1000,
+          maximum: 300000,
+          description: '单块 API 合成的超时（毫秒）。本地服务冷启动慢时可以调大。',
+        },
         voice: {
           type: 'string',
-          description: '音色：中文名（晓晓、晓伊、云希、云扬、曉佳…）或 Edge ShortName（zh-CN-XiaoxiaoNeural）。只能用可用列表里的。',
+          description: 'Edge 音色：中文名（晓晓、晓伊、云希、云扬、曉佳…）或 Edge ShortName（zh-CN-XiaoxiaoNeural）。只在 edge 引擎下有效。',
         },
         rate: {
           type: 'integer',
@@ -195,8 +287,18 @@ export function speechToolDefs(handlers: SpeechToolHandlers): ToolDef[] {
   return defs;
 }
 
-const BOOLEAN_KEYS = ['readSay', 'readAsk', 'readOptions', 'prewarm', 'verbose', 'enabled'] as const;
-const NUMBER_KEYS = ['rate', 'pitch', 'volume', 'chunkMinChars', 'chunkMaxChars', 'gapMs'] as const;
+const BOOLEAN_KEYS = [
+  'readSay', 'readAsk', 'readOptions', 'prewarm', 'verbose', 'enabled', 'useEdge', 'useApi',
+] as const;
+const NUMBER_KEYS = [
+  'rate', 'pitch', 'volume', 'chunkMinChars', 'chunkMaxChars', 'gapMs', 'apiTimeoutMs', 'apiSpeedFactor', 'apiVolume',
+] as const;
+/** 字符串项；除 CLEARABLE 之外，空白值一律当作「没说」。 */
+const STRING_KEYS = [
+  'engine', 'apiBase', 'apiKey', 'apiModel', 'apiVoice', 'apiFormat', 'apiInstructions', 'apiLanguage', 'voice',
+] as const;
+/** 这几项空串是有意义的：清掉原来填的值。 */
+const CLEARABLE = new Set<string>(['apiKey', 'apiModel', 'apiInstructions', 'apiLanguage']);
 
 /**
  * 从工具参数里挑出各项。模型偶尔把数字写成字符串、把布尔写成 `"true"`，
@@ -204,7 +306,13 @@ const NUMBER_KEYS = ['rate', 'pitch', 'volume', 'chunkMinChars', 'chunkMaxChars'
  */
 export function readPatch(args: Record<string, unknown>): SpeechPatch {
   const patch: SpeechPatch = {};
-  if (typeof args.voice === 'string' && args.voice.trim()) patch.voice = args.voice.trim();
+  for (const key of STRING_KEYS) {
+    const raw = args[key];
+    if (typeof raw !== 'string') continue;
+    const value = raw.trim();
+    if (value) patch[key] = value;
+    else if (CLEARABLE.has(key)) patch[key] = '';
+  }
   for (const key of NUMBER_KEYS) {
     const raw = args[key];
     const n = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
