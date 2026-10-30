@@ -1,6 +1,6 @@
 {
   "name": "cortico-world-streamvoice",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "type": "module",
   "description": "流式语音播报：订阅主 session 的输出增量，从台词参数里边生成边按句切块，第一块立刻合成播放，后面排队连播。合成引擎可切：微软 Edge 朗读接口，或任何 OpenAI 兼容的语音服务（只填根地址，模型与音色点一下就能探测出来）。音色、语速、念哪些内容、切块长度、块间停顿都是自己的配置，面板上可以逐个试听 / Streaming speech: chunks the line as it streams out of the model and speaks the first sentence before the reply is finished. The engine is switchable between Microsoft Edge and any OpenAI-compatible speech service (enter the base URL; voices and models are discovered by a built-in connection test).",
   "author": "xww",
