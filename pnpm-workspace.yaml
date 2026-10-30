@@ -1,0 +1,7 @@
+# pnpm 标准字段：允许这些依赖的构建脚本（否则 install 会因 esbuild 被拦而非零退出）
+onlyBuiltDependencies:
+  - esbuild
+
+# Cortico 加载器读取：声明哪些依赖允许跑原生构建脚本
+allowBuilds:
+  esbuild: true

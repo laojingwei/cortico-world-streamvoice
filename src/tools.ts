@@ -9,8 +9,8 @@
  * 预热与详细日志，连挂载开关 `enabled` 也在里面。改的是同一份 `worlds.streamvoice`，
  * 和配置页完全等价，不是另一套影子参数。
  *
- * 数值都收整数并在这里对齐：语速/音调/音量按 5 一档，切块与停顿按配置页的上下限夹住，
- * 免得配置里留下下拉框和滑块显示不出来的野值。
+ * 数值都在这里夹进范围：语速/音量是 0.1–5 的倍率（1 = 原值），音调按 5Hz 一档，
+ * 切块与停顿按配置页的上下限夹住，免得配置里留下滑动条显示不出来的野值。
  */
 import type { ToolDef, ToolOutcome, ToolSpec } from 'cortico/core/types.ts';
 import type { DescribeText } from 'cortico/core/types.ts';
@@ -21,14 +21,14 @@ import {
   CHUNK_MIN_FLOOR,
   GAP_MAX,
 } from './config.ts';
-import { SPEED_MAX, SPEED_MIN, SPEED_STEP } from './api-tts.ts';
+import { UNIT_MAX, UNIT_MIN, UNIT_STEP } from './api-tts.ts';
 import { VOICE_OPTIONS, type VoiceOption } from './voices.ts';
 
 export const STATUS_TOOL = 'speech_status';
 export const TUNE_TOOL = 'speech_tune';
 export const SILENCE_TOOL = 'speech_silence';
 
-/** 语速／音调／音量的上下限与档位；和配置页的下拉一致。 */
+/** 音调（pitch）的上下限与档位；语速/音量已改成 0.1–5 的倍率滑动条。 */
 export const PROSODY_LIMIT = 50;
 export const PROSODY_STEP = 5;
 
@@ -145,20 +145,21 @@ export const SPEECH_TOOL_DECLS: ToolSpec[] = [
         },
         apiSpeedFactor: {
           type: 'number',
-          minimum: SPEED_MIN,
-          maximum: SPEED_MAX,
-          multipleOf: SPEED_STEP,
+          minimum: UNIT_MIN,
+          maximum: UNIT_MAX,
+          multipleOf: UNIT_STEP,
           description:
-            `API 引擎的语速倍率，${SPEED_MIN}–${SPEED_MAX}，1 是原速（等于 1 时不发给后端）。`
-            + '这是输出端变速，压得太多音调会发飘；在意音色就改用 apiInstructions 写「语速快一点」。',
+            `API 引擎的语速倍率 ${UNIT_MIN}–${UNIT_MAX}，1 是原速（2 = 两倍快）。本地 WSOLA 变速、保音调、不发后端。`
+            + '在意语气本身，可配合 apiInstructions 写「语速快一点」。',
         },
         apiVolume: {
-          type: 'integer',
-          minimum: 0,
-          maximum: 100,
+          type: 'number',
+          minimum: UNIT_MIN,
+          maximum: UNIT_MAX,
+          multipleOf: UNIT_STEP,
           description:
-            'API 引擎的播放音量（0–100，100 是原音量）。API 回来的音频是成品，只能在播放器这边调小；'
-            + '它不改变音色，也不发给后端。用户说「API 的声音太响/太轻」时用它。',
+            `API 引擎的播放音量倍率 ${UNIT_MIN}–${UNIT_MAX}，1 是原音量（2 = 两倍响）。本地 PCM 增益，不改变音色、不发后端；`
+            + '放大太多可能破音。用户说「API 的声音太响/太轻」时用它。',
         },
         useEdge: {
           type: 'boolean',
@@ -179,10 +180,11 @@ export const SPEECH_TOOL_DECLS: ToolSpec[] = [
           description: 'Edge 音色：中文名（晓晓、晓伊、云希、云扬、曉佳…）或 Edge ShortName（zh-CN-XiaoxiaoNeural）。只在 edge 引擎下有效。',
         },
         rate: {
-          type: 'integer',
-          minimum: -PROSODY_LIMIT,
-          maximum: PROSODY_LIMIT,
-          description: '语速：相对原速的百分比，负数更慢，正数更快；按 5 取整。',
+          type: 'number',
+          minimum: UNIT_MIN,
+          maximum: UNIT_MAX,
+          multipleOf: UNIT_STEP,
+          description: `Edge 语速倍率 ${UNIT_MIN}–${UNIT_MAX}，1 是原速（2 = 两倍快，0.5 = 一半慢）。本地 WSOLA 变速、保音调。`,
         },
         pitch: {
           type: 'integer',
@@ -191,10 +193,11 @@ export const SPEECH_TOOL_DECLS: ToolSpec[] = [
           description: '音调：Hz，负数更低沉，正数更明亮；按 5 取整。',
         },
         volume: {
-          type: 'integer',
-          minimum: -PROSODY_LIMIT,
-          maximum: PROSODY_LIMIT,
-          description: '音量：相对原音量的百分比，负数更轻；按 5 取整。',
+          type: 'number',
+          minimum: UNIT_MIN,
+          maximum: UNIT_MAX,
+          multipleOf: UNIT_STEP,
+          description: `Edge 音量倍率 ${UNIT_MIN}–${UNIT_MAX}，1 是原音量（2 = 两倍响）。本地 PCM 增益，不发后端。`,
         },
         readSay: { type: 'boolean', description: '念不念 pet_say 的台词。' },
         readAsk: { type: 'boolean', description: '念不念 pet_ask 的问题。' },
@@ -326,9 +329,10 @@ export function readPatch(args: Record<string, unknown>): SpeechPatch {
   return patch;
 }
 
-/** 对齐到 5 的整数档并夹进 -50…50；`kind` 决定单位。 */
-export function prosodyValue(kind: 'percent' | 'hz', raw: number): string {
-  const snapped = Math.round(Math.max(-PROSODY_LIMIT, Math.min(PROSODY_LIMIT, raw)) / PROSODY_STEP) * PROSODY_STEP;
+/** 对齐到 5 的整数档；`kind` 决定单位，`maxPercent` 是百分比（音量）的上限（默认与 rate/pitch 同为 PROSODY_LIMIT）。 */
+export function prosodyValue(kind: 'percent' | 'hz', raw: number, maxPercent: number = PROSODY_LIMIT): string {
+  const cap = kind === 'hz' ? PROSODY_LIMIT : maxPercent;
+  const snapped = Math.round(Math.max(-PROSODY_LIMIT, Math.min(cap, raw)) / PROSODY_STEP) * PROSODY_STEP;
   return `${snapped >= 0 ? '+' : ''}${snapped}${kind === 'hz' ? 'Hz' : '%'}`;
 }
 

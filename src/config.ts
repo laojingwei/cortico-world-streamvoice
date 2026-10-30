@@ -27,12 +27,13 @@ import {
   DEFAULT_API_FORMAT,
   DEFAULT_API_VOICE,
   SPEED_DEFAULT,
-  SPEED_MAX,
-  SPEED_MIN,
-  SPEED_STEP,
+  UNIT_MAX,
+  UNIT_MIN,
+  UNIT_STEP,
   clampSpeed,
   isApiFormat,
   normalizeBase,
+  unitFactor,
   type ApiFormat,
   type ApiSpeech,
 } from './api-tts.ts';
@@ -40,8 +41,6 @@ import {
   DEFAULT_PITCH,
   DEFAULT_VOICE,
   PITCH_OPTIONS,
-  RATE_OPTIONS,
-  VOLUME_OPTIONS,
   voiceOptionRows,
 } from './voices.ts';
 
@@ -79,12 +78,12 @@ export interface StreamVoiceConfigSection {
   useApi: boolean;
   /** Edge TTS 音色 ShortName。 */
   voice: string;
-  /** 相对语速，如 `+15%`。 */
-  rate: string;
+  /** 语速倍率 0.1–5，1 = 原速（本地 WSOLA 变速，音调不变）。 */
+  rate: number;
   /** 音调，如 `+10Hz`。 */
   pitch: string;
-  /** 相对音量，如 `+20%`。 */
-  volume: string;
+  /** 播放音量倍率 0.1–5，1 = 原音量（本地 PCM 增益，不发后端）。 */
+  volume: number;
   /** API 服务的根地址（OpenAI 的 base_url），如 `http://127.0.0.1:8091/v1`。 */
   apiBase: string;
   /** 老版本存的是整条端点；只在读配置时当兜底，不再写。 */
@@ -101,9 +100,9 @@ export interface StreamVoiceConfigSection {
   apiInstructions: string;
   /** 语言，如 `Chinese`；留空不发。 */
   apiLanguage: string;
-  /** 语速倍率 0.25–4，1 = 原速；作为 `speed` 发给后端。 */
+  /** 语速倍率 0.1–5，1 = 原速（本地 WSOLA 变速，音调不变）。 */
   apiSpeedFactor: number;
-  /** 播放音量 0–100：API 回来的音频是成品，只能在播放器这边调。 */
+  /** 播放音量倍率 0.1–5，1 = 原音量（本地 PCM 增益，不发后端）。 */
   apiVolume: number;
   /** 上次探测到的音色与模型清单，配置页的下拉与面板都读它；不进配置页的 schema。 */
   apiCatalog?: ApiCatalog;
@@ -136,9 +135,9 @@ export const STREAMVOICE_DEFAULTS: StreamVoiceConfigSection = {
   useEdge: false,
   useApi: false,
   voice: DEFAULT_VOICE,
-  rate: '+0%',
+  rate: 1,
   pitch: DEFAULT_PITCH,
-  volume: '+0%',
+  volume: 1,
   // 默认指向本机 8091 上的那套服务；切到 api 之前不用管这些值
   apiBase: DEFAULT_API_BASE,
   apiKey: '',
@@ -148,7 +147,7 @@ export const STREAMVOICE_DEFAULTS: StreamVoiceConfigSection = {
   apiInstructions: '',
   apiLanguage: '',
   apiSpeedFactor: SPEED_DEFAULT,
-  apiVolume: 100,
+  apiVolume: 1,
   apiTimeoutMs: API_TIMEOUT_DEFAULT,
   readSay: true,
   readAsk: true,
@@ -186,7 +185,7 @@ export function apiOf(cfg: Partial<StreamVoiceConfigSection> | Record<string, un
     language: str(cfg.apiLanguage, ''),
     timeoutMs: numberIn(cfg.apiTimeoutMs, API_TIMEOUT_DEFAULT, API_TIMEOUT_MIN, API_TIMEOUT_MAX),
     speed: clampSpeed(cfg.apiSpeedFactor),
-    volume: Math.min(100, Math.max(0, numberIn(cfg.apiVolume, 100, 0, 100))),
+    volume: unitFactor(cfg.apiVolume),
   };
 }
 
@@ -205,9 +204,9 @@ export function styleOf(cfg: Partial<StreamVoiceConfigSection> | Record<string, 
   return {
     engine,
     voice: engine === ENGINE_API ? api.voice : str(cfg.voice, DEFAULT_VOICE),
-    rate: str(cfg.rate, '+0%'),
+    rate: unitFactor(cfg.rate),
     pitch: str(cfg.pitch, DEFAULT_PITCH),
-    volume: str(cfg.volume, '+0%'),
+    volume: unitFactor(cfg.volume),
     api,
   };
 }
@@ -340,7 +339,7 @@ const zh: StreamVoiceText = {
     '下拉里是这台服务实际支持的音色，来自最近一次「连接测试」的结果（启动时也会自动探一次），'
     + '所以不用每次打开都重测。换后端或它新增了音色，在面板上再点一次测试即可刷新。',
   apiFormat: '音频格式',
-  apiFormatHint: '让后端回什么容器。mp3 最省带宽、播放器也认；后端只给 wav 时就选 wav。pcm 是无头裸流，播不出来，仅留给特殊服务。',
+  apiFormatHint: '让后端回什么容器。默认 wav（16-bit PCM），解码最省事；mp3 也能在本地解码后再放大音量与变速。flac/opus/pcm 目前不做本地处理，按原始音量原速播放（pcm 是无头裸流，多半直接播不出来）。',
   apiInstructions: '语气指令',
   apiInstructionsHint:
     '整段话共用的语气要求，如「用开心的语气说」「语速偏慢、语气温柔」。支持自然语言控制的后端会照做，不支持的会忽略；'
@@ -349,13 +348,12 @@ const zh: StreamVoiceText = {
   apiLanguageHint: '如 Chinese / English / Japanese；留空则由后端自己判断。',
   apiSpeedFactor: '语速倍率',
   apiSpeedFactorHint:
-    '0.25–4，1 是原速，作为 speed 发给后端；等于 1 时不发送这一项。'
-    + '这是输出端变速，压得太多音调会发飘——介意音色就改用「语气指令」写「语速快一点」。'
-    + '后端不认 speed 时这一项没有效果。',
+    '0.1–5 倍率，1 是原速：2 = 两倍快，0.5 = 一半慢。语速在本地用 WSOLA 变速处理（保音调、不发后端），两套引擎行为一致。'
+    + '压得太极端仍可能发木，按需取用；想让语气本身快慢变化，可配合「语气指令」写「语速快一点」。',
   apiVolume: '播放音量',
   apiVolumeHint:
-    'API 回来的音频是成品，音量只能在播放器这边调：0–100，100 是原音量。'
-    + '它不影响音色，也不发给后端，纯粹让本地放得轻一点。',
+    '音量倍率 0.1–5，1 是原音量：2 = 两倍响，0.5 = 一半。在本地对解码后的 PCM 重算，不发后端，'
+    + '也不改变音色；放大太多可能破音，按需就好。',
   apiTimeout: '请求超时',
   apiTimeoutHint: '单块合成的等待上限。本地服务冷启动或显存紧张时可以调大；卡住超时会跳过这一块，不影响后面。',
   voiceGroup: 'Edge 语音',
@@ -363,11 +361,11 @@ const zh: StreamVoiceText = {
   voice: '音色',
   voiceHint: 'Edge 朗读接口的音色，只在 edge 引擎下生效。列表是这台机器上的接口实际提供、且逐个试过能出声的；别的 ShortName 也能写进 config.json，只是可能合成失败。',
   rate: '语速',
-  rateHint: '相对原速的百分比，5% 一档：-50% 约半速，+50% 约倍半速。',
+  rateHint: '语速倍率 0.1–5，1 是原速：2 = 两倍快，0.5 = 一半慢。本地 WSOLA 变速，音调不变。',
   pitch: '音调',
   pitchHint: '相对原音调的高低，5Hz 一档：负数更低沉，正数更明亮。',
   volume: '音量',
-  volumeHint: '相对原音量的百分比，5% 一档。',
+  volumeHint: '音量倍率 0.1–5，1 是原音量：2 = 两倍响，0.5 = 一半。由本地增益处理，不发后端。',
   contentGroup: '念什么',
   contentGroupDesc: '决定哪些内容会被念出来，以及问句的选项念不念。',
   readSay: '念台词',
@@ -436,7 +434,7 @@ const en: StreamVoiceText = {
     'The list holds what this service actually supports, from the last connection test (one is also run at startup), '
     + 'so there is no need to test every time. Press Test again on the panel after changing backends or voices.',
   apiFormat: 'Audio format',
-  apiFormatHint: 'The container to ask for. mp3 is small and the player handles it; pick wav if the backend only speaks wav. pcm is headerless and will not play — for special cases only.',
+  apiFormatHint: 'The container to ask for. wav (16-bit PCM) is the default and decodes most easily; mp3 is also decoded locally before volume and speed are applied. flac/opus/pcm are left unprocessed and play at their original volume and speed (pcm is headerless and often will not play at all).',
   apiInstructions: 'Tone instruction',
   apiInstructionsHint:
     'One tone instruction for every chunk, e.g. "say it cheerfully" or "slow and gentle". Backends with natural-language control follow it, others ignore it; '
@@ -445,13 +443,12 @@ const en: StreamVoiceText = {
   apiLanguageHint: 'e.g. Chinese / English / Japanese; leave empty to let the backend decide.',
   apiSpeedFactor: 'Speed factor',
   apiSpeedFactorHint:
-    '0.25–4, where 1 is the original speed, sent as `speed`; it is omitted when 1. '
-    + 'This is output-side time stretching, so extreme values wobble the pitch — use a tone instruction like "a bit faster" instead if that matters. '
-    + 'It has no effect when the backend ignores speed.',
+    'Speed multiplier 0.1–5, where 1 is the original (2 = twice as fast, 0.5 = half). Speed is changed locally with WSOLA (pitch preserved, never sent to the backend), '
+    + 'so both engines behave the same. Very extreme values can still sound wooden; pair with a tone instruction like "a bit faster" if needed.',
   apiVolume: 'Playback volume',
   apiVolumeHint:
-    'The audio the API returns is final, so loudness is adjusted in the player: 0–100, where 100 is the original level. '
-    + 'It changes nothing about the timbre and is never sent to the backend.',
+    'Volume multiplier 0.1–5, where 1 is the original level (2 = twice as loud, 0.5 = half). It is recomputed locally on the decoded PCM, never sent to the backend, '
+    + 'and changes nothing about the timbre; very high values may clip.',
   apiTimeout: 'Request timeout',
   apiTimeoutHint: 'Per-chunk limit. Raise it when a local service is slow to warm up; a timed-out chunk is skipped without blocking the rest.',
   voiceGroup: 'Edge voice',
@@ -459,11 +456,11 @@ const en: StreamVoiceText = {
   voice: 'Voice',
   voiceHint: 'An Edge reading voice, used only with the edge engine. The list holds what this machine actually offers and what was tested end to end; other ShortNames can be written into config.json but may fail.',
   rate: 'Rate',
-  rateHint: 'Relative to the normal speaking rate, in 5% steps.',
+  rateHint: 'Speed multiplier 0.1–5, 1 = original (2 = twice as fast, 0.5 = half); changed locally, pitch preserved.',
   pitch: 'Pitch',
   pitchHint: 'Relative pitch in Hz, 5Hz steps: negative is lower, positive is brighter.',
   volume: 'Volume',
-  volumeHint: 'Relative to the normal volume, in 5% steps.',
+  volumeHint: 'Volume multiplier 0.1–5, 1 = original (2 = twice as loud, 0.5 = half); handled locally, never sent to the backend.',
   contentGroup: 'What is read',
   contentGroupDesc: 'Which parts of a reply get a voice, and whether choices are read out.',
   readSay: 'Read the line',
@@ -511,7 +508,7 @@ export function streamVoiceText(language: Language = 'zh'): StreamVoiceText {
 export interface PanelFieldSpec {
   /** `worlds.streamvoice` 下的键名。 */
   key: string;
-  type: 'boolean' | 'select' | 'number' | 'text' | 'password';
+  type: 'boolean' | 'select' | 'number' | 'slider' | 'text' | 'password';
   title: string;
   desc?: string;
   options?: Array<{ value: string; label: string }>;
@@ -551,9 +548,27 @@ export function edgeVoicePanelSpec(language: Language = 'zh'): PanelSpec {
     fields: [
       { key: 'useEdge', type: 'boolean', title: t.edgeSwitch, desc: t.edgeSwitchHint },
       { key: 'voice', type: 'select', title: t.voice, desc: t.voiceHint, options: voiceOptionRows() },
-      { key: 'rate', type: 'select', title: t.rate, desc: t.rateHint, options: literalRows(RATE_OPTIONS) },
+      {
+        key: 'rate',
+        type: 'slider',
+        title: t.rate,
+        desc: t.rateHint,
+        min: UNIT_MIN,
+        max: UNIT_MAX,
+        step: UNIT_STEP,
+        suffix: '×',
+      },
       { key: 'pitch', type: 'select', title: t.pitch, desc: t.pitchHint, options: literalRows(PITCH_OPTIONS) },
-      { key: 'volume', type: 'select', title: t.volume, desc: t.volumeHint, options: literalRows(VOLUME_OPTIONS) },
+      {
+        key: 'volume',
+        type: 'slider',
+        title: t.volume,
+        desc: t.volumeHint,
+        min: UNIT_MIN,
+        max: UNIT_MAX,
+        step: UNIT_STEP,
+        suffix: '×',
+      },
     ],
   };
 }
@@ -581,23 +596,23 @@ export function apiVoicePanelSpec(language: Language = 'zh'): PanelSpec {
       { key: 'apiInstructions', type: 'text', title: t.apiInstructions, desc: t.apiInstructionsHint },
       {
         key: 'apiSpeedFactor',
-        type: 'number',
+        type: 'slider',
         title: t.apiSpeedFactor,
         desc: t.apiSpeedFactorHint,
-        min: SPEED_MIN,
-        max: SPEED_MAX,
-        step: SPEED_STEP,
+        min: UNIT_MIN,
+        max: UNIT_MAX,
+        step: UNIT_STEP,
         suffix: '×',
       },
       {
         key: 'apiVolume',
-        type: 'number',
+        type: 'slider',
         title: t.apiVolume,
         desc: t.apiVolumeHint,
-        min: 0,
-        max: 100,
-        step: 5,
-        suffix: '%',
+        min: UNIT_MIN,
+        max: UNIT_MAX,
+        step: UNIT_STEP,
+        suffix: '×',
       },
       {
         key: 'apiTimeoutMs',

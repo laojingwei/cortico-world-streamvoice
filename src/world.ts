@@ -48,7 +48,6 @@ import {
   gapOf,
   numberIn,
   streamVoiceConfigGroups,
-  STREAMVOICE_DEFAULTS,
   streamVoiceText,
   STREAMVOICE_ID,
   type PanelFieldSpec,
@@ -61,14 +60,12 @@ import {
   API_FORMATS,
   API_TIMEOUT_MAX,
   API_TIMEOUT_MIN,
-  SPEED_DEFAULT,
-  SPEED_MAX,
-  SPEED_MIN,
-  SPEED_STEP,
   clampSpeed,
+  clampUnit,
   isApiFormat,
   normalizeBase,
   probeApi,
+  unitFactor,
 } from './api-tts.ts';
 import { Speaker } from './speaker.ts';
 import {
@@ -83,7 +80,7 @@ import {
   verboseOf,
 } from './voice.ts';
 import type { SpeechStyle } from './speaker.ts';
-import { DEFAULT_PITCH, DEFAULT_VOICE, PITCH_OPTIONS, RATE_OPTIONS, VOICE_OPTIONS, VOLUME_OPTIONS, voiceLabel } from './voices.ts';
+import { DEFAULT_PITCH, DEFAULT_VOICE, PITCH_OPTIONS, VOICE_OPTIONS, voiceLabel } from './voices.ts';
 import { nameOf, prosodyValue, resolveVoice, speechToolDefs, voiceListBrief, type SpeechPatch } from './tools.ts';
 
 /** 会念出来的工具：`pet_say` 的 script，`pet_ask` 的 question。 */
@@ -246,8 +243,8 @@ export class StreamVoiceWorld implements World {
     host.log.info(
       `就绪：引擎 ${engineLabel(engine)}`
       + (engine === 'api'
-        ? `（${api.base}，音色 ${api.voice}，格式 ${api.format}，语速 ${api.speed}×，播放音量 ${api.volume}%）`
-        : `（嗓音 ${style.voice} ${style.rate} ${style.pitch} ${style.volume}）`)
+        ? `（${api.base}，音色 ${api.voice}，格式 ${api.format}，语速 ${api.speed}×，播放音量 ${api.volume}×）`
+        : `（嗓音 ${style.voice} 语速 ${fmtX(style.rate)} ${style.pitch} 音量 ${fmtX(style.volume)}）`)
       + `，切块 ${limits.min}–${limits.max} 字，`
       + `块间停顿 ${gapOf(this.opts.cfg)}ms，念台词${readSayOf(this.opts.cfg) ? '开' : '关'}，`
       + `念问句${readAskOf(this.opts.cfg) ? '开' : '关'}，念选项${readOptionsOf(this.opts.cfg) ? '开' : '关'}`,
@@ -326,10 +323,10 @@ export class StreamVoiceWorld implements World {
           + `${api.instructions ? `，整段语气指令「${brief(api.instructions)}」` : ''}`
           + `${api.key ? '，需要令牌' : ''}。这一套参数整段共用，不能逐句改。`
         : `合成引擎：Edge 朗读接口，音色 ${voiceLabel(style.voice)}（${style.voice}），`
-          + `语速 ${style.rate}，音调 ${style.pitch}，音量 ${style.volume}。`,
+          + `语速 ${fmtX(style.rate)}，音调 ${style.pitch}，音量 ${fmtX(style.volume)}。`,
       'streamvoice.state': engine === 'api'
-        ? `嗓音 ${api.voice}（API 服务返回的声音），语速倍率 ${api.speed}×，播放音量 ${api.volume}%；音调由后端决定。`
-        : `嗓音 ${voiceLabel(style.voice)}（${style.voice}），语速 ${style.rate}，音调 ${style.pitch}，音量 ${style.volume}。`,
+        ? `嗓音 ${api.voice}（API 服务返回的声音），语速倍率 ${api.speed}×，播放音量 ${api.volume}×；音调由后端决定。`
+        : `嗓音 ${voiceLabel(style.voice)}（${style.voice}），语速 ${fmtX(style.rate)}，音调 ${style.pitch}，音量 ${fmtX(style.volume)}。`,
       'streamvoice.content': `念什么：台词${onOff(readSayOf(cfg))}、问句${onOff(readAskOf(cfg))}、选项${onOff(readOptionsOf(cfg))}。`,
       'streamvoice.chunks': `切块与节奏：短句并下一句的门槛 ${limits.min} 字，单块上限 ${limits.max} 字，块间停顿 ${gapOf(cfg)}ms。`,
       'streamvoice.switches': `预热${onOff(prewarmOf(cfg))}、详细日志${onOff(verboseOf(cfg))}、总开关${onOff(cfg.enabled !== false)}。`,
@@ -469,13 +466,13 @@ export class StreamVoiceWorld implements World {
           out.value = pickStr(cfg.voice, DEFAULT_VOICE);
           break;
         case 'rate':
-          out.value = pickStr(cfg.rate, STREAMVOICE_DEFAULTS.rate);
+          out.value = unitFactor(cfg.rate);
           break;
         case 'pitch':
           out.value = pickStr(cfg.pitch, DEFAULT_PITCH);
           break;
         case 'volume':
-          out.value = pickStr(cfg.volume, STREAMVOICE_DEFAULTS.volume);
+          out.value = unitFactor(cfg.volume);
           break;
         case 'apiBase':
           out.value = api.base;
@@ -602,8 +599,8 @@ export class StreamVoiceWorld implements World {
         + `${api.language ? `，语言 ${api.language}` : ''}`
         + `${api.instructions ? `，整段语气「${brief(api.instructions)}」` : ''}`
         + `${api.key ? '，带访问令牌' : ''}，超时 ${api.timeoutMs}ms；`
-        + `语速倍率 ${api.speed}×，播放音量 ${api.volume}%（音调只能在后端决定；rate/pitch/volume 只在 Edge 引擎下生效）。`
-      : `引擎：Edge 朗读，嗓音 ${voiceLabel(style.voice)}（${style.voice}），语速 ${style.rate}，音调 ${style.pitch}，音量 ${style.volume}。`;
+        + `语速倍率 ${api.speed}×，播放音量 ${api.volume}×（音调只能在后端决定；rate/pitch/volume 只在 Edge 引擎下生效）。`
+      : `引擎：Edge 朗读，嗓音 ${voiceLabel(style.voice)}（${style.voice}），语速 ${fmtX(style.rate)}，音调 ${style.pitch}，音量 ${fmtX(style.volume)}。`;
     return `${engineLine}`
       + `念什么：台词${onOff(readSayOf(cfg))}、问句${onOff(readAskOf(cfg))}、选项${onOff(readOptionsOf(cfg))}。`
       + `切块与节奏：短句并下一句的门槛 ${limits.min} 字，单块上限 ${limits.max} 字，块间停顿 ${gapOf(cfg)}ms。`
@@ -712,9 +709,9 @@ export class StreamVoiceWorld implements World {
     }
     if (patch.apiVolume !== undefined) {
       const was = apiOf(cfg).volume;
-      const volume = Math.min(100, Math.max(0, Math.round(patch.apiVolume)));
+      const volume = unitFactor(patch.apiVolume);
       next.apiVolume = volume;
-      if (volume !== was) changed.push(`API 播放音量 ${was}% → ${volume}%`);
+      if (volume !== was) changed.push(`API 播放音量 ${fmtX(was)} → ${fmtX(volume)}`);
     }
     // 两个启用开关：开一个就把另一个关掉，和配置页上的行为一致
     if (patch.useEdge === true && patch.useApi === true) {
@@ -753,9 +750,17 @@ export class StreamVoiceWorld implements World {
     for (const key of ['rate', 'pitch', 'volume'] as const) {
       const raw = patch[key];
       if (raw === undefined) continue;
-      const value = prosodyValue(key === 'pitch' ? 'hz' : 'percent', raw);
-      next[key] = value;
-      if (value !== before[key]) changed.push(`${PROSODY_LABEL[key]} ${before[key]} → ${value}`);
+      if (key === 'pitch') {
+        const value = prosodyValue('hz', Number(raw));
+        next.pitch = value;
+        if (value !== before.pitch) changed.push(`${PROSODY_LABEL.pitch} ${before.pitch} → ${value}`);
+      } else {
+        // 语速/音量是 0.1–5 的倍率（1 = 原值），夹进范围即可；不再走百分比档位
+        const value = clampUnit(Number(raw));
+        next[key] = value;
+        const was = key === 'rate' ? before.rate : before.volume;
+        if (value !== was) changed.push(`${PROSODY_LABEL[key]} ${fmtX(was)} → ${fmtX(value)}`);
+      }
     }
 
     // ---- 念什么 ----
@@ -826,7 +831,7 @@ export class StreamVoiceWorld implements World {
     const voiceLine = engineNow === 'api'
       ? `引擎 API 服务（${apiNow.base}），音色 ${apiNow.voice}，格式 ${apiNow.format}，语速倍率 ${apiNow.speed}×`
         + `${apiNow.instructions ? `，语气「${brief(apiNow.instructions)}」` : ''}；`
-      : `引擎 Edge 朗读，音色 ${voiceLabel(after.voice)}，语速 ${after.rate}，音调 ${after.pitch}，音量 ${after.volume}；`;
+      : `引擎 Edge 朗读，音色 ${voiceLabel(after.voice)}，语速 ${fmtX(after.rate)}，音调 ${after.pitch}，音量 ${fmtX(after.volume)}；`;
     const now = `现在：${voiceLine}`
       + `念台词${onOff(readSayOf(cfg))}、问句${onOff(readAskOf(cfg))}、选项${onOff(readOptionsOf(cfg))}；`
       + `切块 ${afterLimits.min}–${afterLimits.max} 字，停顿 ${gapOf(cfg)}ms；`
@@ -893,9 +898,7 @@ export class StreamVoiceWorld implements World {
         instructions: typeof arg.instructions === 'string' ? arg.instructions.trim() : base.instructions,
         language: picked(arg.language) ?? base.language,
         speed: arg.speed === undefined ? base.speed : clampSpeed(arg.speed),
-        volume: arg.volume === undefined
-          ? base.volume
-          : Math.min(100, Math.max(0, Math.round(Number(arg.volume) || 0))),
+        volume: unitFactor(arg.volume, base.volume),
       };
       style = {
         engine,
@@ -909,9 +912,9 @@ export class StreamVoiceWorld implements World {
       style = {
         engine,
         voice: shortName(arg.voice) ?? pickStr(cfg.voice, DEFAULT_VOICE),
-        rate: prosody(arg.rate, /^[+-]?\d{1,3}%$/) ?? pickStr(cfg.rate, '+0%'),
+        rate: unitFactor(arg.rate, unitFactor(cfg.rate)),
         pitch: prosody(arg.pitch, /^[+-]?\d{1,3}Hz$/) ?? pickStr(cfg.pitch, DEFAULT_PITCH),
-        volume: prosody(arg.volume, /^[+-]?\d{1,3}%$/) ?? pickStr(cfg.volume, '+0%'),
+        volume: unitFactor(arg.volume, unitFactor(cfg.volume)),
         api: current.api,
       };
     }
@@ -1018,9 +1021,9 @@ export class StreamVoiceWorld implements World {
       // 与配置原值比，而不是 `this.style`：API 引擎下后者报的是 API 的参数
       const cur = {
         voice: typeof cfg.voice === 'string' && cfg.voice.trim() ? cfg.voice : DEFAULT_VOICE,
-        rate: typeof cfg.rate === 'string' && cfg.rate.trim() ? cfg.rate : STREAMVOICE_DEFAULTS.rate,
+        rate: unitFactor(cfg.rate),
         pitch: typeof cfg.pitch === 'string' && cfg.pitch.trim() ? cfg.pitch : DEFAULT_PITCH,
-        volume: typeof cfg.volume === 'string' && cfg.volume.trim() ? cfg.volume : STREAMVOICE_DEFAULTS.volume,
+        volume: unitFactor(cfg.volume),
       };
       if (typeof arg.voice === 'string') {
         const voice = arg.voice.trim();
@@ -1030,17 +1033,30 @@ export class StreamVoiceWorld implements World {
           changed.push(`音色 ${voiceLabel(cur.voice)} → ${voiceLabel(voice)}`);
         }
       }
-      const tiers = { rate: RATE_OPTIONS, pitch: PITCH_OPTIONS, volume: VOLUME_OPTIONS } as const;
-      const names = { rate: '语速', pitch: '音调', volume: '音量' } as const;
-      for (const key of ['rate', 'pitch', 'volume'] as const) {
-        if (typeof arg[key] !== 'string') continue;
-        const value = (arg[key] as string).trim();
-        if (!tiers[key].includes(value)) {
-          return fail(`${names[key]}只能选 ${tiers[key][0]} … ${tiers[key][tiers[key].length - 1]} 之间的档位，给的是「${value}」。`);
+      // 语速/音量：滑动条给 0.1–5 的倍率（也兼容旧字符串/百分比），夹进范围即可
+      if (arg.rate !== undefined) {
+        const rate = unitFactor(arg.rate);
+        if (rate !== cur.rate) {
+          next.rate = rate;
+          changed.push(`语速 ${fmtX(cur.rate)} → ${fmtX(rate)}`);
         }
-        if (value !== cur[key]) {
-          next[key] = value;
-          changed.push(`${names[key]} ${cur[key]} → ${value}`);
+      }
+      if (arg.volume !== undefined) {
+        const volume = unitFactor(arg.volume);
+        if (volume !== cur.volume) {
+          next.volume = volume;
+          changed.push(`音量 ${fmtX(cur.volume)} → ${fmtX(volume)}`);
+        }
+      }
+      // 音调仍是下拉档位（字符串）
+      if (typeof arg.pitch === 'string') {
+        const pitch = arg.pitch.trim();
+        if (!PITCH_OPTIONS.includes(pitch)) {
+          return fail(`音调只能选 ${PITCH_OPTIONS[0]} … ${PITCH_OPTIONS[PITCH_OPTIONS.length - 1]} 之间的档位，给的是「${pitch}」。`);
+        }
+        if (pitch !== cur.pitch) {
+          next.pitch = pitch;
+          changed.push(`音调 ${cur.pitch} → ${pitch}`);
         }
       }
     } else {
@@ -1115,10 +1131,10 @@ export class StreamVoiceWorld implements World {
         }
       }
       if (arg.apiVolume !== undefined) {
-        const volume = Math.min(100, Math.max(0, Math.round(num(arg.apiVolume) ?? 100)));
+        const volume = unitFactor(arg.apiVolume);
         if (volume !== before.volume) {
           next.apiVolume = volume;
-          changed.push(`播放音量 ${before.volume}% → ${volume}%`);
+          changed.push(`播放音量 ${fmtX(before.volume)} → ${fmtX(volume)}`);
         }
       }
       if (arg.apiTimeoutMs !== undefined) {
@@ -1292,6 +1308,12 @@ function prosody(value: unknown, pattern: RegExp): string | null {
 /** 日志里露一小段就够看。 */
 function brief(text: string): string {
   return text.length > 40 ? `${text.slice(0, 40)}…` : text;
+}
+
+/** 倍率在人话里的样子：1 → `1×`，1.2 → `1.2×`。 */
+function fmtX(n: number): string {
+  const v = Math.round((Number.isFinite(n) ? n : 1) * 100) / 100;
+  return `${v}×`;
 }
 
 /** 开关在人话里的样子。 */

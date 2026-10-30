@@ -448,6 +448,29 @@ const mountVoice = async (ctx, which) => {
       }
       getters.set(field.key, () => Number(input.value));
       controls.set(field.key, { kind: 'number', ctl: input });
+    } else if (field.type === 'slider') {
+      // 滑动条：0.1–5 的倍率，右边跟一个读数（如「1.2×」）
+      const min = field.min != null ? Number(field.min) : 0.1;
+      const max = field.max != null ? Number(field.max) : 5;
+      const step = field.step != null ? Number(field.step) : 0.05;
+      const input = ui.input({ type: 'range' });
+      input.min = String(min);
+      input.max = String(max);
+      input.step = String(step);
+      input.value = String(field.value ?? 1);
+      input.style.flex = '1 1 auto';
+      input.style.minWidth = '0';
+      input.style.colorScheme = scheme;
+      input.style.accentColor = 'var(--accent, #4c8dff)';
+      const suffix = field.suffix || '';
+      const fmtNum = (n) => String(Math.round(Number(n) * 100) / 100);
+      const readout = el('span', null, fmtNum(input.value) + suffix);
+      readout.style.cssText = 'flex:0 0 48px;text-align:right;font-variant-numeric:tabular-nums;color:var(--ink-soft);font-size:var(--text-detail,12px)';
+      const syncReadout = () => { readout.textContent = fmtNum(input.value) + suffix; };
+      input.addEventListener('input', syncReadout);
+      mid.append(input, readout);
+      getters.set(field.key, () => Number(input.value));
+      controls.set(field.key, { kind: 'slider', ctl: input, syncReadout });
     } else {
       const input = ui.input({
         type: field.type === 'password' ? 'password' : 'text',
@@ -677,6 +700,11 @@ const mountVoice = async (ctx, which) => {
         entry.ctl.setChecked(field.value === true);
       } else if (field.type === 'select') {
         if (!active) fillSelect(entry.ctl, field.options || [], String(field.value ?? ''));
+      } else if (field.type === 'slider') {
+        if (!active) {
+          entry.ctl.value = String(field.value ?? 1);
+          if (entry.syncReadout) entry.syncReadout();
+        }
       } else if (field.type === 'password') {
         if (!active && !entry.ctl.value && field.placeholder) entry.ctl.placeholder = field.placeholder;
       } else if (!active) {

@@ -69,6 +69,7 @@
     "README.md"
   ],
   "dependencies": {
+    "mpg123-decoder": "^1.0.3",
     "ws": "^8.21.3"
   },
   "devDependencies": {
@@ -80,6 +81,7 @@
   "scripts": {
     "check": "tsx scripts/check-chunker.ts",
     "check:api": "tsx scripts/check-api.ts",
+    "check:audio": "tsx scripts/check-audio.ts",
     "check:speaker": "tsx scripts/check-speaker.ts",
     "check:tools": "tsx scripts/check-tools.ts",
     "check:world": "tsx scripts/check-world-tools.ts",

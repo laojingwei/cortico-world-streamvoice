@@ -1,5 +1,5 @@
 /**
- * 出声的那一头：一片 mp3 交给播放器，等它说完。
+ * 出声的那一头：一片音频（wav/mp3）交给播放器，等它说完。
  *
  * Windows 上常驻一个 PowerShell，用 winmm 的 MCI 一片一片地 `play … wait`。常驻是为了
  * 省掉每片一次的 PowerShell 启动时间——流式播报里两块之间的空隙全靠这个压住；打断就
@@ -19,8 +19,8 @@ export interface Player {
   /**
    * 放一片，resolve 时声音已经结束（或被 cut、或失败）。
    *
-   * `volume` 是 0–100 的播放音量：API 引擎回来的音频是成品，调不了合成参数，
-   * 只能在这里把声音放轻；Edge 引擎已经在合成时带了音量，这里传 100 即可。
+   * `volume` 是 0–100 的额外播放缩放（MCI 设备用）：真正的音量增减已在交给播放器之前
+   * 由增益烤进音频，所以正常情况下这里传 100，把音频原样放出来。
    */
   play(clip: string, volume?: number): Promise<PlayResult>;
   /** 立刻停下正在放的一片。 */
@@ -50,7 +50,9 @@ const PS_SCRIPT = [
   '    $vol = [int]$line.Substring(0, $tab)',
   '    $file = $line.Substring($tab + 1)',
   '  }',
-  "  [WinMM.MCI]::mciSendString(\"open `\"$file`\" type mpegvideo alias svplay\", $null, 0, [System.IntPtr]::Zero) | Out-Null",
+  '  $audioType = \'mpegvideo\'',
+  '  if ([System.IO.Path]::GetExtension($file).ToLower() -eq \'.wav\') { $audioType = \'waveaudio\' }',
+  "  [WinMM.MCI]::mciSendString(\"open `\"$file`\" type $audioType alias svplay\", $null, 0, [System.IntPtr]::Zero) | Out-Null",
   '  [WinMM.MCI]::mciSendString("setaudio svplay volume to $vol", $null, 0, [System.IntPtr]::Zero) | Out-Null',
   '  [WinMM.MCI]::mciSendString(\'play svplay wait\', $null, 0, [System.IntPtr]::Zero) | Out-Null',
   "  [WinMM.MCI]::mciSendString('close svplay', $null, 0, [System.IntPtr]::Zero) | Out-Null",

@@ -23,17 +23,27 @@ export type ApiFormat = (typeof API_FORMATS)[number];
 /** 根地址默认指向本机 WSL 里那套服务；换后端只改这一项。 */
 export const DEFAULT_API_BASE = 'http://127.0.0.1:8091/v1';
 export const DEFAULT_API_VOICE = 'vivian';
-export const DEFAULT_API_FORMAT: ApiFormat = 'mp3';
+// 默认走 wav：16-bit PCM 未压缩，解码最省事，音量放大与变速都在本地做。
+// 后端只支持 mp3 也行——mp3 同样会在本地解码后再处理，格式不影响能否放大。
+export const DEFAULT_API_FORMAT: ApiFormat = 'wav';
 
 export const API_TIMEOUT_DEFAULT = 30_000;
 export const API_TIMEOUT_MIN = 1_000;
 export const API_TIMEOUT_MAX = 300_000;
 
-/** 语速倍率：1 = 原速，按 OpenAI 的 speed 范围取值。 */
-export const SPEED_MIN = 0.25;
-export const SPEED_MAX = 4;
+/**
+ * 语速/音量统一的倍率范围：0.1–5，1 = 原值。语速倍率沿用这几个名字给工具与面板用。
+ */
+export const SPEED_MIN = 0.1;
+export const SPEED_MAX = 5;
 export const SPEED_STEP = 0.05;
 export const SPEED_DEFAULT = 1;
+
+/** 音量的倍率范围与语速一致：0.1–5，1 = 原音量。 */
+export const UNIT_MIN = SPEED_MIN;
+export const UNIT_MAX = SPEED_MAX;
+export const UNIT_STEP = SPEED_STEP;
+export const UNIT_DEFAULT = 1;
 
 /** 一次 API 合成要的全部参数（不含文本）。 */
 export interface ApiSpeech {
@@ -51,9 +61,9 @@ export interface ApiSpeech {
   /** `Chinese` / `English`…；留空不发。 */
   language: string;
   timeoutMs: number;
-  /** 语速倍率 0.25–4；等于 1 时按原速处理，不发 speed。 */
+  /** 语速倍率 0.1–5，1 = 原速；**不发给后端**，由本地 WSOLA 变速处理（音调不变）。 */
   speed: number;
-  /** 播放音量 0–100：后端回来的音频是成品，只能在前端播放器上调。 */
+  /** 播放音量倍率 0.1–5，1 = 原音量。**不发给后端**，本地解码后做 PCM 增益。 */
   volume: number;
 }
 
@@ -69,12 +79,50 @@ export function isApiFormat(value: unknown): value is ApiFormat {
   return typeof value === 'string' && (API_FORMATS as readonly string[]).includes(value);
 }
 
-/** 把配置里的值夹进 0.25–4，并去掉浮点尾巴。 */
-export function clampSpeed(value: unknown): number {
+/** 把配置里的值夹进 0.1–5，保留两位小数；认不出就用 fallback。 */
+export function clampUnit(value: unknown, fallback = UNIT_DEFAULT): number {
   const n = typeof value === 'number' ? value : Number(value);
-  if (!Number.isFinite(n)) return SPEED_DEFAULT;
-  const clamped = Math.min(SPEED_MAX, Math.max(SPEED_MIN, n));
+  if (!Number.isFinite(n)) return fallback;
+  const clamped = Math.min(UNIT_MAX, Math.max(UNIT_MIN, n));
   return Math.round(clamped * 100) / 100;
+}
+
+/** 语速倍率（历史名字保留，行为等同 clampUnit）。 */
+export function clampSpeed(value: unknown): number {
+  return clampUnit(value, SPEED_DEFAULT);
+}
+
+/**
+ * 把「旧格式」或「新格式」统一成倍率（0.1–5，1 = 原值）。
+ *
+ * 兼容三种写法：
+ * - 数字：本身就是倍率；大于 5 的按旧版 0–300 的百分比折算（100 → 1）。
+ * - 旧 Edge 字符串：`+15%` → 1.15、`-50%` → 0.5、`+200%` → 3。
+ * - 纯数字字符串：按数字处理。
+ *
+ * 认不出来就返回 fallback。这样老配置（'+0%'、100 这类）升级后不用手动迁移。
+ */
+export function unitFactor(value: unknown, fallback = UNIT_DEFAULT): number {
+  let n: number;
+  if (typeof value === 'number') {
+    n = value;
+  } else if (typeof value === 'string') {
+    const s = value.trim();
+    if (!s) return fallback;
+    if (s.endsWith('%')) {
+      const p = parseFloat(s);
+      if (!Number.isFinite(p)) return fallback;
+      n = 1 + p / 100;
+    } else {
+      n = parseFloat(s);
+      if (!Number.isFinite(n)) return fallback;
+    }
+  } else {
+    return fallback;
+  }
+  // 旧版音量是 0–300 的百分比（100 = 原音量）；大于上限的一律按百分比折算
+  if (n > UNIT_MAX) n = n / 100;
+  return clampUnit(n, fallback);
 }
 
 /**
@@ -154,8 +202,8 @@ export async function speechToFile(
   if (api.model) body.model = api.model;
   if (api.instructions) body.instructions = api.instructions;
   if (api.language) body.language = api.language;
-  // 原速就不发：有的后端见到 speed 就走变速路径，白白损失音质
-  if (api.speed !== SPEED_DEFAULT) body.speed = clampSpeed(api.speed);
+  // 语速不再发给后端：统一在本地用 WSOLA 变速（音调不变、两套引擎行为一致）。
+  // 这里只按原速要音频，回来再由 audio.ts 处理时长与音量。
 
   // 自己超时：后端卡住时不能把整条队列吊死
   const timeout = AbortSignal.timeout(api.timeoutMs);

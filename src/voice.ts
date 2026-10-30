@@ -93,8 +93,8 @@ export function duplicateReaders(botDir: string): string[] {
   return out;
 }
 
-/** 面板与日志上用的一句嗓音说明。API 引擎下音调/音量由后端决定，只列音色、格式与倍率。 */
+/** 面板与日志上用的一句嗓音说明。API 引擎下音调由后端决定，只列音色、格式与倍率。 */
 export function describeStyle(style: SpeechStyle): string {
   if (style.engine === 'api') return `API · ${style.api.voice} · ${style.api.format} · ${style.api.speed}×`;
-  return `${style.voice} · ${style.rate} · ${style.pitch} · ${style.volume}`;
+  return `${style.voice} · ${style.rate}× · ${style.pitch} · ${style.volume}×`;
 }

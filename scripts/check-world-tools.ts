@@ -55,11 +55,11 @@ ok('回执带高级项与总开关', status.includes('详细日志') && status.i
 ok('回执带此刻状态', status.includes('待命'));
 
 console.log('speech_tune：嗓音四项');
-const tuned = await tool(world, TUNE_TOOL)!.handler({ voice: '云希', rate: 20, volume: -15 }, {} as never);
+const tuned = await tool(world, TUNE_TOOL)!.handler({ voice: '云希', rate: 1.2, volume: 0.85 }, {} as never);
 ok('回执说明音色变了', String(tuned).includes('云希'), String(tuned).slice(0, 100));
 ok('口语名翻成 ShortName', cfg.voice === 'zh-CN-YunxiNeural', String(cfg.voice));
-ok('语速对齐到 +20%', cfg.rate === '+20%', String(cfg.rate));
-ok('音量对齐到 -15%', cfg.volume === '-15%', String(cfg.volume));
+ok('语速写成 1.2×', cfg.rate === 1.2, String(cfg.rate));
+ok('音量写成 0.85×', cfg.volume === 0.85, String(cfg.volume));
 
 console.log('speech_tune：念什么 / 切块 / 节奏 / 高级');
 const tuned2 = await tool(world, TUNE_TOOL)!.handler(
@@ -125,6 +125,9 @@ ok('Edge 音色是下拉、带人话标签', (edgeSpec.fields.find((f) => f.key 
   .some((o) => o.value === 'zh-CN-XiaoxiaoNeural' && o.label.includes('女')), '');
 ok('Edge 页当前值来自活配置', edgeSpec.fields.find((f) => f.key === 'voice')?.value === apiWorld.cfg.voice,
   String(edgeSpec.fields.find((f) => f.key === 'voice')?.value));
+ok('Edge 语速/音量是滑动条', ['rate', 'volume'].every(
+  (k) => edgeSpec.fields.find((f) => f.key === k)?.type === 'slider',
+), edgeSpec.fields.map((f) => `${f.key}:${f.type}`).filter((s) => s.startsWith('rate') || s.startsWith('volume')).join(','));
 
 const apiSpec = await invokePanel('api-voice', 'fields');
 ok('API 页有全部项', ['useApi', 'apiBase', 'apiKey', 'apiVoice', 'apiModel', 'apiFormat',
@@ -136,10 +139,13 @@ ok('令牌框是 password 且不回显', keyField.type === 'password' && keyFiel
 ok('令牌框说明了有没有设过', typeof keyField.placeholder === 'string' && keyField.placeholder.length > 0,
   String(keyField.placeholder));
 ok('API 音色是下拉（无缓存时也留当前值）', (apiSpec.fields.find((f) => f.key === 'apiVoice')?.options ?? []).length > 0);
+ok('API 语速/音量是滑动条', ['apiSpeedFactor', 'apiVolume'].every(
+  (k) => apiSpec.fields.find((f) => f.key === k)?.type === 'slider',
+), apiSpec.fields.map((f) => `${f.key}:${f.type}`).filter((s) => s.startsWith('apiSpeed') || s.startsWith('apiVolume')).join(','));
 
 console.log('页签：保存');
-const saved = await invokePanel('api-voice', 'save', [{ apiVoice: 'aiden', apiFormat: 'mp3', apiVolume: 40 }]);
-ok('保存写进配置', apiWorld.cfg.apiVoice === 'aiden' && apiWorld.cfg.apiVolume === 40 && apiWorld.cfg.apiFormat === 'mp3',
+const saved = await invokePanel('api-voice', 'save', [{ apiVoice: 'aiden', apiFormat: 'mp3', apiVolume: 2 }]);
+ok('保存写进配置', apiWorld.cfg.apiVoice === 'aiden' && apiWorld.cfg.apiVolume === 2 && apiWorld.cfg.apiFormat === 'mp3',
   `${String(apiWorld.cfg.apiVoice)} / ${String(apiWorld.cfg.apiVolume)}`);
 ok('回执列了改动', String(saved.text).includes('aiden'), String(saved.text).slice(0, 100));
 const badPanelFormat = await invokePanel('api-voice', 'save', [{ apiFormat: 'ogg' }]);

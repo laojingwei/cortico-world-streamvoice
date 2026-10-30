@@ -11,6 +11,6 @@ export {
   type SpeechEngine,
   type StreamVoiceConfigSection,
 } from './config.ts';
-export { DEFAULT_VOICE, RATE_OPTIONS, VOICE_OPTIONS, VOLUME_OPTIONS, voiceOptionRows } from './voices.ts';
+export { DEFAULT_VOICE, VOICE_OPTIONS, voiceOptionRows } from './voices.ts';
 export { duplicateReaders, readOptionsOf } from './voice.ts';
 export { StreamVoiceWorld, type StreamVoiceWorldOptions } from './world.ts';

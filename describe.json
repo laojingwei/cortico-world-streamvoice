@@ -69,16 +69,17 @@
           },
           "apiSpeedFactor": {
             "type": "number",
-            "minimum": 0.25,
-            "maximum": 4,
+            "minimum": 0.1,
+            "maximum": 5,
             "multipleOf": 0.05,
-            "description": "API 引擎的语速倍率，0.25–4，1 是原速（等于 1 时不发给后端）。这是输出端变速，压得太多音调会发飘；在意音色就改用 apiInstructions 写「语速快一点」。"
+            "description": "API 引擎的语速倍率 0.1–5，1 是原速（2 = 两倍快）。本地 WSOLA 变速、保音调、不发后端。在意语气本身，可配合 apiInstructions 写「语速快一点」。"
           },
           "apiVolume": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 100,
-            "description": "API 引擎的播放音量（0–100，100 是原音量）。API 回来的音频是成品，只能在播放器这边调小；它不改变音色，也不发给后端。用户说「API 的声音太响/太轻」时用它。"
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 5,
+            "multipleOf": 0.05,
+            "description": "API 引擎的播放音量倍率 0.1–5，1 是原音量（2 = 两倍响）。本地 PCM 增益，不改变音色、不发后端；放大太多可能破音。用户说「API 的声音太响/太轻」时用它。"
           },
           "useEdge": {
             "type": "boolean",
@@ -99,10 +100,11 @@
             "description": "Edge 音色：中文名（晓晓、晓伊、云希、云扬、曉佳…）或 Edge ShortName（zh-CN-XiaoxiaoNeural）。只在 edge 引擎下有效。"
           },
           "rate": {
-            "type": "integer",
-            "minimum": -50,
-            "maximum": 50,
-            "description": "语速：相对原速的百分比，负数更慢，正数更快；按 5 取整。"
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 5,
+            "multipleOf": 0.05,
+            "description": "Edge 语速倍率 0.1–5，1 是原速（2 = 两倍快，0.5 = 一半慢）。本地 WSOLA 变速、保音调。"
           },
           "pitch": {
             "type": "integer",
@@ -111,10 +113,11 @@
             "description": "音调：Hz，负数更低沉，正数更明亮；按 5 取整。"
           },
           "volume": {
-            "type": "integer",
-            "minimum": -50,
-            "maximum": 50,
-            "description": "音量：相对原音量的百分比，负数更轻；按 5 取整。"
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 5,
+            "multipleOf": 0.05,
+            "description": "Edge 音量倍率 0.1–5，1 是原音量（2 = 两倍响）。本地 PCM 增益，不发后端。"
           },
           "readSay": {
             "type": "boolean",

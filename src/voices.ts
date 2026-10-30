@@ -50,21 +50,10 @@ export const VOICE_OPTIONS: VoiceOption[] = [
 
 export const DEFAULT_VOICE = 'zh-CN-XiaoxiaoNeural';
 
-/** 语速：相对原速的百分比，5% 一档。-50% 约为半速，+50% 约为倍半速。 */
-export const RATE_OPTIONS = percentSteps(-50, 50, 5);
-/** 音量：相对原音量的百分比，5% 一档。 */
-export const VOLUME_OPTIONS = percentSteps(-50, 50, 5);
-/** 音调：Hz，5Hz 一档。负数更低沉，正数更明亮。 */
+/** 音调：Hz，5Hz 一档。负数更低沉，正数更明亮。语速与音量已改成 0.1–5 的滑动条，不再走档位表。 */
 export const PITCH_OPTIONS = hzSteps(-50, 50, 5);
 
 export const DEFAULT_PITCH = '+0Hz';
-
-/** `-50%` … `+50%`，5 一档，0 写成 `+0%`。 */
-function percentSteps(from: number, to: number, step: number): string[] {
-  const out: string[] = [];
-  for (let n = from; n <= to; n += step) out.push(`${n >= 0 ? '+' : ''}${n}%`);
-  return out;
-}
 
 /** `-50Hz` … `+50Hz`。 */
 function hzSteps(from: number, to: number, step: number): string[] {

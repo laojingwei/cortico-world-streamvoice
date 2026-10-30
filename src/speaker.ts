@@ -18,18 +18,32 @@ import { join } from 'node:path';
 import { speechToFile, type ApiSpeech } from './api-tts.ts';
 import { MsEdgeTTS, OUTPUT_FORMAT } from './edge-tts/index.ts';
 import { createPlayer, type Player } from './player.ts';
+import { processAudio } from './audio.ts';
 
-const MP3 = OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3;
+/**
+ * Edge 的输出格式必须是**压缩流**（MP3）：Edge 朗读接口只回 MP3 / WebM(Opus)，
+ * 要 WAV 会直接断连接。选 MP3 是因为它解码简单，且 24kHz 正好和 API 的 WAV 同速率。
+ * 音量、语速都在本地解码成 PCM 之后再算，所以这里不需要未压缩格式。
+ */
+const EDGE_FORMAT = OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3;
+/**
+ * Edge 合成时 SSML 里的音量与语速都固定走默认：
+ * 真正的音量增减与变速全部交给后处理的 PCM（`audio.ts`），既和 API 引擎用同一套逻辑，
+ * 也突破了 SSML <prosody volume/rate> 调不大、且变速会带音调发飘的限制。
+ */
+const EDGE_SYNTH_VOLUME = '+0%';
 
 export interface SpeechStyle {
   /** 用哪套引擎：`edge` 走 Edge 朗读接口，`api` 走 `api` 里的 HTTP 服务。 */
   engine: 'edge' | 'api';
   /** 当前音色：Edge 引擎下是 ShortName，API 引擎下是后端的音色名。 */
   voice: string;
-  rate: string;
+  /** 语速倍率 0.1–5，1 = 原速（前端 WSOLA 变速）。 */
+  rate: number;
   /** 音调，如 `+10Hz`。 */
   pitch: string;
-  volume: string;
+  /** 播放音量倍率 0.1–5，1 = 原音量（前端 PCM 增益）。 */
+  volume: number;
   /** API 引擎的请求参数；Edge 引擎下也用不到，但一直带着，切引擎时不用重算。 */
   api: ApiSpeech;
 }
@@ -158,7 +172,7 @@ export class Speaker {
         const stage = this.stage ?? (this.stage = await mkdtemp(join(tmpdir(), 'coopanion-streamvoice-')));
         const dir = await mkdtemp(join(stage, 'prime-'));
         try {
-          await this.tts!.toFile(dir, '嗯', { rate: style.rate, pitch: style.pitch, volume: style.volume });
+          await this.tts!.toFile(dir, '嗯', { pitch: style.pitch, volume: EDGE_SYNTH_VOLUME });
           this.primedAt = Date.now();
         } finally {
           await rm(dir, { recursive: true, force: true }).catch(() => {});
@@ -251,7 +265,8 @@ export class Speaker {
       const clip = await this.synthesiseTo(style, text, dir);
       const synthMs = Date.now() - started;
       this.speakingNow = true;
-      const result = await this.player.play(clip, volumeOf(style));
+      const gained = await processAudio(clip, dir, { gain: gainOf(style), rate: rateOf(style) });
+      const result = await this.player.play(gained, 100);
       this.speakingNow = false;
       // 播放器刚被 hush 过，重新点一个备用
       void this.player.warm(stage).catch(() => {});
@@ -338,7 +353,9 @@ export class Speaker {
       if (first || this.verbose) {
         this.log(`第 ${job.seq} 块出声（${first ? `切出后 ${this.stats.firstAudioMs}ms，` : ''}合成 ${job.synthAt - job.startedAt}ms，等播放 ${job.spokenAt - job.synthAt}ms）`);
       }
-      const result = await this.player.play(job.clip, volumeOf(job.style));
+      // 音量与语速都在交给播放器之前烤进音频（gain + WSOLA 变速），播放器永远按 100% 原速放
+      const clip = await processAudio(job.clip, job.dir!, { gain: gainOf(job.style), rate: rateOf(job.style) });
+      const result = await this.player.play(clip, 100);
       this.speakingNow = false;
       this.current = null;
       this.take(job);
@@ -374,10 +391,11 @@ export class Speaker {
   private async prepareTts(style: SpeechStyle): Promise<void> {
     // API 引擎没有需要复用的连接；真正连接在 speechToFile 里
     if (style.engine === 'api') return;
-    const key = [style.voice, style.rate, style.pitch, style.volume].join('|');
+    // 音量与语速都不再进 SSML（改走前端 PCM/变速），只有音色和音调会影响连接参数，少重连
+    const key = [style.voice, style.pitch].join('|');
     this.tts ??= new MsEdgeTTS({ enableLogger: false });
     if (key === this.metadataKey) return;
-    await this.tts.setMetadata(style.voice, MP3);
+    await this.tts.setMetadata(style.voice, EDGE_FORMAT);
     this.metadataKey = key;
   }
 
@@ -393,7 +411,7 @@ export class Speaker {
     }
     await this.prepareTts(style);
     const { audioFilePath } = await this.tts!.toFile(dir, text, {
-      rate: style.rate, pitch: style.pitch, volume: style.volume,
+      pitch: style.pitch, volume: EDGE_SYNTH_VOLUME,
     });
     return audioFilePath;
   }
@@ -423,11 +441,27 @@ export class Speaker {
 }
 
 /**
- * 播放音量：API 引擎的音频是成品，音量在播放器这边调；Edge 引擎的
- * 音量已经由合成参数带进音频里了，原样放即可。
+ * 这一片的音量增益倍率：1 = 原声，>1 放大，<1 放轻。
+ *
+ * - API 引擎：`api.volume` 本身就是倍率（0.1–5）。
+ * - Edge 引擎：`style.volume` 也是倍率（0.1–5），由配置换算而来。
+ * 两路都交给 PCM 增益在播放前统一处理，播放器永远按 100% 放。
  */
-function volumeOf(style: SpeechStyle): number {
-  return style.engine === 'api' ? style.api.volume : 100;
+function gainOf(style: SpeechStyle): number {
+  const gain = style.engine === 'api' ? style.api.volume : style.volume;
+  return Number.isFinite(gain) && gain > 0 ? gain : 1;
+}
+
+/**
+ * 这一片的语速倍率：1 = 原速，>1 更快（时长变短），<1 更慢。
+ *
+ * - API 引擎：`api.speed` 本身就是倍率（0.1–5，不再发给后端）。
+ * - Edge 引擎：`style.rate` 也是倍率（0.1–5）。
+ * 两路都在本地用 WSOLA 变速，音调不变。
+ */
+function rateOf(style: SpeechStyle): number {
+  const rate = style.engine === 'api' ? style.api.speed : style.rate;
+  return Number.isFinite(rate) && rate > 0 ? rate : 1;
 }
 
 /** 等一会儿；块与块之间的停顿用它。 */
