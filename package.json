@@ -63,6 +63,7 @@
     "src",
     "dist",
     "assets",
+    "docs",
     "scripts",
     "describe.json",
     "CHANGELOG.md",
